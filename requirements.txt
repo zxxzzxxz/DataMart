@@ -8,5 +8,9 @@
 apache-airflow==3.3.1
 pendulum>=3.0
 
+# 可视化 DAG 设计器：渲染 dags/designer/*.yaml（需 v1.x 才兼容 Airflow 3；
+# 该包不在 Airflow 官方 constraints 文件中，CI 带 constraints 安装不影响）
+dag-factory>=1.0,<2.0
+
 # 测试
 pytest>=8.0

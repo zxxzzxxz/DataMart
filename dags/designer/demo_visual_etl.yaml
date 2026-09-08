@@ -1,0 +1,44 @@
+demo_visual_etl:
+  default_args:
+    owner: designer
+    retries: 2
+    retry_delay: 300
+    on_failure_callback: alerting.send_failure_alert
+  schedule: null
+  description: 设计器 POC 示例：建表 -> 校验 -> 通知（仅手动触发）
+  designer:
+    nodes:
+      build_demo:
+        type: sql
+        position:
+          x: 120.0
+          y: 80.0
+      check_demo:
+        type: sql_check
+        position:
+          x: 120.0
+          y: 240.0
+      notify_done:
+        type: notify
+        position:
+          x: 120.0
+          y: 400.0
+  tasks:
+    build_demo:
+      operator: airflow.providers.common.sql.operators.sql.SQLExecuteQueryOperator
+      conn_id: warehouse
+      sql: CREATE TABLE IF NOT EXISTS dm.designer_demo AS SELECT 1 AS id
+    check_demo:
+      operator: airflow.providers.common.sql.operators.sql.SQLValueCheckOperator
+      conn_id: warehouse
+      sql: SELECT count(*) FROM dm.designer_demo
+      pass_value: '1'
+      dependencies:
+      - build_demo
+    notify_done:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: alerting._post_webhook
+      op_kwargs:
+        message: demo_visual_etl 运行完成
+      dependencies:
+      - check_demo

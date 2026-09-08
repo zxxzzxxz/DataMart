@@ -47,6 +47,7 @@
 - **增量框架**：plugins/incremental.py 水位线模板（staging 落地 → merge upsert → 最后才推进水位线，失败自动重抽不丢数）
 - **区间补跑**：conf 传参 `{"start_date","end_date"}` 逐日重建，带格式/顺序/31 天上限校验
 - **水平扩展**：Worker 默认 2 副本，`--scale airflow-worker=N` 继续扩
+- **可视化 DAG 设计器**：拖拽连线配置 Job 依赖（:8081），YAML 为唯一事实源进 git，dag-factory 渲染成真实 DAG——设计器下线不影响已生成 DAG 的运行（设计见 docs/visual-dag-designer.md）
 
 ## 快速开始
 
@@ -66,6 +67,7 @@ docker compose down
 | 入口 | 地址 | 说明 |
 |---|---|---|
 | Airflow UI | http://localhost:8080 | admin / admin123（DAG 监控、日志、重跑、配置查看、用户管理） |
+| 可视化设计器 | http://localhost:8081 | 拖拽连线建 DAG（token 见 compose 中 DESIGNER_TOKEN，默认 designer-dev-token） |
 | Grafana | http://localhost:3000 | admin / admin123（Airflow 指标看板、告警规则） |
 | 告警中心 | http://localhost:9099 | 接收所有告警（任务失败 / Deadline / Grafana 规则） |
 | Prometheus | http://localhost:9090 | 指标查询 |
@@ -76,12 +78,19 @@ docker compose down
 
 ```
 dags/                  DAG 定义（调度任务编排）
-plugins/               通用插件（alerting.py 告警回调）
+dags/designer_loader.py dag-factory 引导：扫描 designer/*.yaml 渲染成 DAG
+dags/designer/         可视化设计器产物（YAML 即 DAG，进 git 版本管理）
+plugins/               通用插件（alerting.py 告警回调、incremental.py 增量水位线）
+plugins/dag_designer/  设计器渲染层（图模型 schema / 节点目录 catalog / YAML 双向转换）
+designer/              可视化 DAG 设计器（backend=FastAPI，frontend=React+React Flow）
 config/                airflow.cfg 覆盖配置（可选）
 logs/                  任务运行日志（自动生成，勿提交）
-tests/                 DAG 完整性测试
+backups/               数据库定时备份（自动生成，勿提交）
+scripts/               运维脚本（backup.sh 手动备份 / restore.sh 恢复）
+tests/                 DAG 完整性测试 + 设计器渲染层单测
 docker/warehouse-init/ 数据仓库初始化 SQL（分层 schema + 示例源数据）
-docker-compose.yaml
+docs/                  设计文档
+docker-compose.yaml    开发环境（+ docker-compose.prod.yml 生产覆盖层）
 ```
 
 ## 常用操作
@@ -163,7 +172,10 @@ scripts/restore.sh backups/warehouse_20260908_042223.dump
 - 多 Worker：2 副本均注册并处理任务
 - 多 Scheduler 容灾：停掉 1 个 Scheduler 后手动触发的 DAG 仍被另一实例调度并成功执行
 - 灾备恢复：备份 → 删除 4 条 dag_run → 从 dump 恢复 → 记录完整还原，Airflow 组件自动重启
-- DAG 完整性测试：9 项全部通过
+- 可视化设计器端到端：API 创建 3 节点连线 DAG → dag-factory 渲染 → Airflow 触发 success → 删除后消失
+- 设计器 API：token 认证 / 409 冲突 / mtime 乐观锁 / 成环与缺参校验拦截 全部实测通过
+- 坏 YAML 隔离：损坏文件不影响其他设计器 DAG 与既有 6 个 DAG 的加载
+- DAG 完整性测试：27 项全部通过（9 项 DAG 结构 + 18 项设计器渲染层）
 
 ## 已知设计说明
 

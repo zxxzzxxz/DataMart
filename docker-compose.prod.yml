@@ -17,7 +17,7 @@ services:
   airflow-scheduler:
     environment:
       <<: *airflow-prod-env
-      _PIP_ADDITIONAL_REQUIREMENTS: pytest
+      _PIP_ADDITIONAL_REQUIREMENTS: "dag-factory pytest"
   airflow-dag-processor:
     environment: *airflow-prod-env
   airflow-worker:

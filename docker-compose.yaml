@@ -30,6 +30,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
     AIRFLOW__METRICS__STATSD_PORT: '8125'
     AIRFLOW__METRICS__STATSD_PREFIX: airflow
+    # 容器启动时安装 dag-factory：渲染 dags/designer/*.yaml（可视化 DAG 设计器的 YAML 事实源）
+    _PIP_ADDITIONAL_REQUIREMENTS: dag-factory
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
@@ -118,8 +120,8 @@ services:
       replicas: 2
     environment:
       <<: *airflow-common-env
-      # 容器启动时自动安装 pytest（用于在容器内跑 DAG 测试，见 README「运行测试」）
-      _PIP_ADDITIONAL_REQUIREMENTS: pytest
+      # 容器启动时自动安装 dag-factory（common 环境已含，此处因 merge 覆盖需重复）与 pytest（容器内跑 DAG 测试，见 README「运行测试」）
+      _PIP_ADDITIONAL_REQUIREMENTS: "dag-factory pytest"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
       interval: 30s
@@ -259,6 +261,29 @@ services:
       - alert-data:/data
     ports:
       - "9099:9099"
+    restart: always
+
+  # ---------- 可视化 DAG 设计器 ----------
+  # 后端 API：读写 dags/designer/*.yaml（唯一事实源），经 dag-factory 渲染进 Airflow。
+  # 不暴露宿主端口，由 dag-designer（前端 nginx）反代 /api 访问。
+  designer-api:
+    build: ./designer/backend
+    environment:
+      DAGS_DIR: /data/dags
+      PLUGINS_DIR: /data/plugins
+      DESIGNER_TOKEN: ${DESIGNER_TOKEN:-designer-dev-token}
+    volumes:
+      - ./dags:/data/dags
+      - ./plugins:/data/plugins:ro
+    restart: always
+
+  # 前端界面：http://localhost:8081（nginx 托管 React 构建产物，反代 /api 到 designer-api:8000）
+  dag-designer:
+    build: ./designer/frontend
+    ports:
+      - "8081:80"
+    depends_on:
+      - designer-api
     restart: always
 
   # ---------- 灾备 ----------
