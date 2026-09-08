@@ -1,0 +1,2 @@
+# 统一使用 LF 行尾（容器内脚本/SQL/YAML 不能带 CRLF）
+* text=auto eol=lf

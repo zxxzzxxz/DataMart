@@ -1,0 +1,12 @@
+# 本地开发 / CI 用依赖（Docker 运行时使用 apache/airflow 镜像，无需安装这些）。
+# 建议在 Python 3.12 虚拟环境中安装：
+#   py -3.12 -m venv .venv
+#   .venv\Scripts\activate
+#   pip install -r requirements.txt
+#
+# 注意版本需与 docker-compose.yaml 中的 AIRFLOW_IMAGE_NAME 保持一致。
+apache-airflow==3.3.1
+pendulum>=3.0
+
+# 测试
+pytest>=8.0

@@ -1,0 +1,28 @@
+# statsd-exporter 映射：把 Airflow 的 statsd 指标转换为带标签的 Prometheus 指标
+mappings:
+  # 任务完成计数：airflow.ti.finish.<dag_id>.<task_id>.<state>
+  - match: "airflow.ti.finish.*.*.*"
+    match_metric_type: counter
+    name: "airflow_ti_finish"
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+      state: "$3"
+  # 任务启动计数：airflow.ti.start.<dag_id>.<task_id>
+  - match: "airflow.ti.start.*.*"
+    match_metric_type: counter
+    name: "airflow_ti_start"
+    labels:
+      dag_id: "$1"
+      task_id: "$2"
+  # DAG Run 时长：airflow.dagrun.duration.success.<dag_id> / .failed.<dag_id>
+  - match: "airflow.dagrun.duration.success.*"
+    match_metric_type: observer
+    name: "airflow_dagrun_duration_success"
+    labels:
+      dag_id: "$1"
+  - match: "airflow.dagrun.duration.failed.*"
+    match_metric_type: observer
+    name: "airflow_dagrun_duration_failed"
+    labels:
+      dag_id: "$1"

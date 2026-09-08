@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Airflow 指标（经 statsd-exporter 转换）
+  - job_name: airflow
+    static_configs:
+      - targets: ["statsd-exporter:9102"]

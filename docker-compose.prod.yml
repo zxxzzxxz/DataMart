@@ -1,0 +1,36 @@
+# 生产环境覆盖层（与基础 docker-compose.yaml 叠加使用）：
+#   docker compose -f docker-compose.yaml -f docker-compose.prod.yml up -d
+#
+# 与开发的差异：
+# - 三个密钥/密码改为强制传入（缺少时 compose 直接报错，拒绝带默认值启动）
+# - 数据仓库端口不再暴露到宿主机
+# - Worker 扩到 4 副本
+
+x-airflow-prod-env: &airflow-prod-env
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?生产环境必须提供 AIRFLOW__CORE__FERNET_KEY}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?生产环境必须提供 AIRFLOW__API_AUTH__JWT_SECRET}
+  _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?生产环境必须提供 _AIRFLOW_WWW_USER_PASSWORD}
+
+services:
+  airflow-apiserver:
+    environment: *airflow-prod-env
+  airflow-scheduler:
+    environment:
+      <<: *airflow-prod-env
+      _PIP_ADDITIONAL_REQUIREMENTS: pytest
+  airflow-dag-processor:
+    environment: *airflow-prod-env
+  airflow-worker:
+    environment: *airflow-prod-env
+    deploy:
+      replicas: 4
+  airflow-triggerer:
+    environment: *airflow-prod-env
+  airflow-init:
+    environment: *airflow-prod-env
+  flower:
+    environment: *airflow-prod-env
+
+  # 生产环境不对宿主机暴露数据仓库端口（仅容器网络内访问）
+  warehouse:
+    ports: []

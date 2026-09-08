@@ -1,0 +1,266 @@
+x-airflow-common: &airflow-common
+  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.1}
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    # Fernet 密钥：用于加密存储连接密码等敏感信息（生产环境请换成独立生成的值并保密）
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-WrZlRScMD8Iq1SJmgKOBvWEfXozYZEJ7qe-55dSOJ4E=}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-datamart-dev-jwt-secret-please-change}
+    # Worker 通过内部域名回调 API Server 上报状态（Task SDK 执行 API）
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # 开启 Scheduler 健康检查 HTTP 服务（供容器 healthcheck 探测 8974 端口）
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # 在 UI 的 Admin -> Config 页面展示当前配置（配置界面）
+    AIRFLOW__API__EXPOSE_CONFIG: 'true'
+    # FAB 认证管理器：提供用户/角色/权限管理 UI（Admin -> Security）
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    # UI 时区（默认 UTC，如需东八区可改成 Asia/Shanghai）
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: ${AIRFLOW__CORE__DEFAULT_TIMEZONE:-Asia/Shanghai}
+    # 数据仓库连接（UI 的 Admin -> Connections 中可见，DAG 通过 conn_id="warehouse" 使用）
+    AIRFLOW_CONN_WAREHOUSE: postgresql://warehouse:warehouse@warehouse:5432/warehouse
+    # 项目级变量（UI 的 Admin -> Variables 中可见）
+    # 告警 webhook：默认指向内置告警中心（http://localhost:9099），生产换成企业微信/飞书机器人地址
+    AIRFLOW_VAR_DATAMART_ALERT_WEBHOOK: ${DATAMART_ALERT_WEBHOOK:-http://alert-webhook:9099/alert}
+    # StatsD 指标：发送到 statsd-exporter，再由 Prometheus 采集（Grafana 看板 :3000）
+    AIRFLOW__METRICS__STATSD_ON: 'true'
+    AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+    AIRFLOW__METRICS__STATSD_PORT: '8125'
+    AIRFLOW__METRICS__STATSD_PREFIX: airflow
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./config:/opt/airflow/config
+    - ./plugins:/opt/airflow/plugins
+    - ./tests:/opt/airflow/tests
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    redis:
+      condition: service_started
+    postgres:
+      condition: service_healthy
+    warehouse:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # 数据仓库：ods 源层 / dwh 明细层 / dm 集市层（宿主机可用 psql -p 15432 直连查看）
+  warehouse:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: warehouse
+      POSTGRES_PASSWORD: warehouse
+      POSTGRES_DB: warehouse
+    ports:
+      - "15432:5432"
+    volumes:
+      - warehouse-db-volume:/var/lib/postgresql/data
+      - ./docker/warehouse-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "warehouse"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  redis:
+    image: redis:7.2-bookworm
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    restart: always
+
+  # Web UI 入口：http://localhost:8080 （admin / admin123）
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    environment:
+      <<: *airflow-common-env
+      # 容器启动时自动安装 pytest（用于在容器内跑 DAG 测试，见 README「运行测试」）
+      _PIP_ADDITIONAL_REQUIREMENTS: pytest
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Airflow 3 中负责解析 DAG 文件的独立组件
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # Celery worker：真正执行任务（默认 2 副本并行，可加 --scale airflow-worker=N 再扩）
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    deploy:
+      replicas: 2
+    healthcheck:
+      test: ["CMD-SHELL", 'celery --broker redis://:@redis:6379/0 inspect ping -d celery@$$HOSTNAME']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # 首次启动时初始化数据库并创建管理员账号
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command: -c 'exec /entrypoint airflow version'
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin123}
+
+  # Celery worker 监控界面：http://localhost:5555
+  flower:
+    <<: *airflow-common
+    command: celery flower
+    ports:
+      - "5555:5555"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------- 可观测性栈 ----------
+  # StatsD -> Prometheus 指标转换器（接收 Airflow 指标，暴露 9102 供采集）
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.28.0
+    command:
+      - "--statsd.mapping-config=/mapping/mapping.yaml"
+      - "--statsd.listen-udp=:8125"
+    volumes:
+      - ./docker/statsd-exporter/mapping.yaml:/mapping/mapping.yaml:ro
+    restart: always
+
+  # 指标存储与查询：http://localhost:9090
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: always
+
+  # 看板与告警规则：http://localhost:3000 （admin / admin123）
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin123}
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: always
+    depends_on:
+      - prometheus
+
+  # 告警中心（真实 webhook 通道）：http://localhost:9099
+  alert-webhook:
+    image: python:3.12-alpine
+    command: python /app/receiver.py
+    volumes:
+      - ./docker/alert-webhook/receiver.py:/app/receiver.py:ro
+      - alert-data:/data
+    ports:
+      - "9099:9099"
+    restart: always
+
+volumes:
+  postgres-db-volume:
+  warehouse-db-volume:
+  prometheus-data:
+  grafana-data:
+  alert-data:

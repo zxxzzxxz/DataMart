@@ -1,0 +1,23 @@
+[project]
+name = "datamart"
+version = "0.1.0"
+description = "DataMart 数据集市调度平台（Apache Airflow 3）"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+src = ["."]
+
+[tool.ruff.lint]
+# E: pycodestyle 错误, W: 警告, F: pyflakes, I: import 排序, UP: 语法升级, B: bugbear, C4: 推导式, SIM: 简化
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM"]
+# DAG 定义里常用位运算表达依赖（>>），不排除
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件允许断言风格自由一些
+"tests/*" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

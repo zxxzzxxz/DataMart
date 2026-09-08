@@ -1,0 +1,10 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: datamart-webhook
+    receivers:
+      - uid: datamart-webhook
+        type: webhook
+        settings:
+          url: http://alert-webhook:9099/alert
+        disableResolveMessage: false
