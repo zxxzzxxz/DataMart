@@ -107,6 +107,28 @@ docker compose exec airflow-scheduler bash -c \
   "python -m pytest /opt/airflow/tests -q"
 ```
 
+## 开发工作流
+
+```bash
+# 代码检查与格式化（本地 venv 已含 ruff，或 pip install ruff）
+.venv\Scripts\ruff check dags plugins tests        # lint
+.venv\Scripts\ruff format dags plugins tests       # 格式化
+
+# 提交代码即触发 CI（.github/workflows/ci.yml）：ruff 检查 + DAG 完整性测试
+# DAG 测试在 CI 中用 sqlite + 官方 constraints 运行，无需启动 Docker
+```
+
+## 环境分离
+
+```bash
+# 开发（默认）：所有端口暴露、内置开发密钥
+docker compose up -d
+
+# 生产：密钥强制从环境变量传入（缺失即拒绝启动）、数据仓库不暴露端口、Worker 4 副本
+export AIRFLOW__CORE__FERNET_KEY=... AIRFLOW__API_AUTH__JWT_SECRET=... _AIRFLOW_WWW_USER_PASSWORD=...
+docker compose -f docker-compose.yaml -f docker-compose.prod.yml up -d
+```
+
 ## 验收基线（本环境已实测通过）
 
 - ETL 全链路落库：dm.daily_city_sales 按 业务日期×城市 聚合
