@@ -129,6 +129,24 @@ export AIRFLOW__CORE__FERNET_KEY=... AIRFLOW__API_AUTH__JWT_SECRET=... _AIRFLOW_
 docker compose -f docker-compose.yaml -f docker-compose.prod.yml up -d
 ```
 
+## 高可用与灾备
+
+**多 Scheduler 容灾**：`airflow-scheduler` 默认 2 副本。多个 Scheduler 共享元数据库自动协调分片，任一实例宕机，另一个无缝接管全部调度，无需人工干预。
+
+**数据库定时备份**：`postgres-backup` 服务每天对 airflow 元数据库和 warehouse 业务库各做一次 `pg_dump`（自定义格式），输出到 `./backups/`，每库保留最近 7 份。可用环境变量调整：`BACKUP_INTERVAL_SECONDS`（备份间隔，默认 86400）、`BACKUP_KEEP`（保留份数，默认 7）。
+
+```bash
+# 立即手动备份一次（不等每日定时）
+scripts/backup.sh        # Git Bash / Linux 执行
+
+# 从备份恢复（按文件名自动识别目标库；恢复元数据库时会自动停/启 Airflow 组件）
+scripts/restore.sh backups/airflow_20260908_042223.dump
+scripts/restore.sh backups/warehouse_20260908_042223.dump
+```
+
+> 说明：dag-processor / triggerer / apiserver 目前单副本——它们宕机不影响已排队任务的执行，
+> 重启后自动恢复；如需更高保障可同样加 `deploy.replicas`。
+
 ## 验收基线（本环境已实测通过）
 
 - ETL 全链路落库：dm.daily_city_sales 按 业务日期×城市 聚合
@@ -143,6 +161,8 @@ docker compose -f docker-compose.yaml -f docker-compose.prod.yml up -d
 - 单任务重跑：UI/API Clear + run 重新排队 → 任务按新尝试次数重跑
 - 定时调度：@daily 调度运行自动产生（scheduled__ 前缀）
 - 多 Worker：2 副本均注册并处理任务
+- 多 Scheduler 容灾：停掉 1 个 Scheduler 后手动触发的 DAG 仍被另一实例调度并成功执行
+- 灾备恢复：备份 → 删除 4 条 dag_run → 从 dump 恢复 → 记录完整还原，Airflow 组件自动重启
 - DAG 完整性测试：9 项全部通过
 
 ## 已知设计说明

@@ -110,9 +110,12 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # 调度器：2 副本高可用（多 Scheduler 共享元数据库自动分片协调，任一宕机另一个无缝接管）
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
+    deploy:
+      replicas: 2
     environment:
       <<: *airflow-common-env
       # 容器启动时自动安装 pytest（用于在容器内跑 DAG 测试，见 README「运行测试」）
@@ -256,6 +259,28 @@ services:
       - alert-data:/data
     ports:
       - "9099:9099"
+    restart: always
+
+  # ---------- 灾备 ----------
+  # 数据库定时备份：默认每天一次 pg_dump（airflow 元数据库 + warehouse 业务库），
+  # 输出到 ./backups，每库保留最近 BACKUP_KEEP 份。手动立即备份：scripts/backup.sh；恢复：scripts/restore.sh
+  postgres-backup:
+    image: postgres:16
+    entrypoint: /bin/bash
+    command: -c 'while true; do /usr/local/bin/backup.sh; sleep "$${BACKUP_INTERVAL_SECONDS:-86400}"; done'
+    environment:
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      AIRFLOW_DB_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
+    volumes:
+      - ./docker/backup/backup.sh:/usr/local/bin/backup.sh:ro
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      warehouse:
+        condition: service_healthy
     restart: always
 
 volumes:
