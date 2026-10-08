@@ -72,7 +72,7 @@ jobs:
       #   docker/nginx     → datamart-nginx            docker/airflow    → datamart-airflow
       # 每个镜像打两个标签：<版本号>（去 v）与 latest；cache type=gha 跨 workflow 复用构建缓存。
       - name: 构建并推送 datamart-designer-api
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: designer/backend/Dockerfile
@@ -84,7 +84,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=designer-api
 
       - name: 构建并推送 datamart-dag-designer
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: designer/frontend
           push: true
@@ -95,7 +95,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=dag-designer
 
       - name: 构建并推送 datamart-postgres
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/postgres
           push: true
@@ -106,7 +106,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=postgres
 
       - name: 构建并推送 datamart-postgres-backup
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/backup
           push: true
@@ -117,7 +117,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=postgres-backup
 
       - name: 构建并推送 datamart-nginx
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: docker/nginx
           push: true
@@ -128,7 +128,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=nginx
 
       - name: 构建并推送 datamart-airflow
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/airflow/Dockerfile
