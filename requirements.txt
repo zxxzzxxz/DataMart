@@ -17,5 +17,5 @@ apache-airflow-providers-http==6.1.0
 # 测试
 pytest>=8.0
 # PostgreSQL 双驱动验收，覆盖 Airflow PostgresHook 的 psycopg3 自动选择路径。
-psycopg[binary]>=3.1,<4
+psycopg[binary]>=3.3.6,<4
 psycopg2-binary>=2.9,<3
