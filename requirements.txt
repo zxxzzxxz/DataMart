@@ -7,7 +7,7 @@
 # 注意版本需与 docker/airflow/Dockerfile 中的 FROM apache/airflow 保持一致。
 apache-airflow==3.3.2
 -e .
-pendulum>=3.0
+pendulum>=3.2.0
 
 # 可视化 DAG 设计器：渲染 dags/designer/*.yaml（需 v1.x 才兼容 Airflow 3；
 # 该包不在 Airflow 官方 constraints 文件中，CI 带 constraints 安装不影响）
