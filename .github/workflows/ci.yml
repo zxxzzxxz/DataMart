@@ -94,7 +94,7 @@ jobs:
           # 让 plugins/ 下的共享模块（alerting/incremental）可被 DAG 导入
           AIRFLOW__CORE__PLUGINS_FOLDER: ${{ github.workspace }}/plugins
           DATAMART_TEST_DSN: postgresql://postgres:acceptance-only@127.0.0.1:5432/postgres
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: airflow-postgres-integration
@@ -124,7 +124,7 @@ jobs:
         run: python -m pytest tests/test_warehouse_pipeline.py -q -o junit_family=xunit1 --junitxml=acceptance-postgres.xml
         env:
           DATAMART_TEST_DSN: postgresql://postgres:acceptance-only@127.0.0.1:5432/postgres
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: postgres-acceptance
