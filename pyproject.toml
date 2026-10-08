@@ -3,7 +3,7 @@ name = "datamart"
 version = "0.1.0"
 description = "DataMart 数据集市调度平台（Apache Airflow 3）"
 requires-python = ">=3.12"
-dependencies = ["pydantic==2.13.5", "PyYAML==6.0.3", "croniter==6.2.4", "filelock==3.32.6"]
+dependencies = ["pydantic==2.13.5", "PyYAML==6.0.3", "croniter==6.2.4", "filelock==4.0.11"]
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]
