@@ -1,0 +1,48 @@
+# 精简演示（mini）覆盖层：面向 2核2G 小机器的功能演示形态
+# 用法（必须与基础文件叠加；不要再用 prod 覆盖层）：
+#   docker compose -f docker-compose.yaml -f docker-compose.mini.yml up -d postgres warehouse redis
+#   # 等 postgres/warehouse 转 healthy 后：
+#   docker compose -f docker-compose.yaml -f docker-compose.mini.yml run --rm flyway
+#   docker compose -f docker-compose.yaml -f docker-compose.mini.yml up -d airflow-init
+#   docker compose -f docker-compose.yaml -f docker-compose.mini.yml up -d --no-deps \
+#     airflow-apiserver airflow-scheduler airflow-dag-processor airflow-triggerer airflow-worker
+#   # 可选：可视化设计器（+约 200MB 内存）
+#   docker compose -f docker-compose.yaml -f docker-compose.mini.yml up -d --no-deps designer-api dag-designer
+#
+# 与全量形态的取舍（均为有意裁剪，不适合生产）：
+# - 全部多副本降为 1（无 HA）；不起 postgres/warehouse 热备、备份/MinIO、监控告警栈
+#   （prometheus/grafana/loki/alloy/alertmanager/exporters）、vault、keycloak、flower、nginx 统一入口
+# - Airflow UI 直连 http://<ip>:8080（HTTP 明文，无 TLS，仅演示）；设计器直连 http://<ip>:8081
+# - 数据质量 DAG 的 Pushgateway 推送与失败告警的 webhook 无人接收（任务本身逻辑不受影响）
+# - 强烈建议先加 4GB swap（见下），否则 ETL 任务执行高峰容易触发 OOM：
+#     sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 && sudo chmod 600 /swapfile
+#     sudo mkswap /swapfile && sudo swapon /swapfile && echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+services:
+  # 多副本全部降为 1（基础文件为 ×2）
+  airflow-apiserver:
+    ports:
+      - "8080:8080"   # 无 edge nginx，直连 Airflow UI/API（HTTP，仅演示）
+    deploy:
+      replicas: 1
+  airflow-scheduler:
+    deploy:
+      replicas: 1
+  airflow-dag-processor:
+    deploy:
+      replicas: 1
+  airflow-triggerer:
+    deploy:
+      replicas: 1
+  airflow-worker:
+    deploy:
+      replicas: 1
+    environment:
+      # 2G 内存下 worker 进程池收到最小：1~2 个
+      CELERY_AUTOSCALE_MIN: "1"
+      CELERY_AUTOSCALE_MAX: "2"
+
+  # 设计器前端自包含（内置 nginx 反代 /api → designer-api），直接发布 8081
+  dag-designer:
+    ports:
+      - "8081:80"

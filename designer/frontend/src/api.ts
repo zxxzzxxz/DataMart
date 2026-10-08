@@ -1,4 +1,15 @@
-import type { DesignerDag, DagSummary, NodeType, ValidationError } from './types';
+import type {
+  CheckSqlResult,
+  DagMutationResult,
+  DagRun,
+  DagVersion,
+  DagVersionDetail,
+  DesignerDag,
+  DagSummary,
+  NodeType,
+  TaskStatus,
+  ValidationError,
+} from './types';
 import { isMockEnabled, mockRequest } from './mock';
 
 const TOKEN_KEY = 'dag_designer_token';
@@ -86,15 +97,56 @@ export function errBodyErrors(e: unknown): ValidationError[] | null {
   return Array.isArray(errs) ? (errs as ValidationError[]) : null;
 }
 
+// 错误响应体本身（如 409 删除冲突的 {detail, active_runs}）
+export function errBody(e: unknown): Record<string, unknown> | null {
+  const b = (e as { body?: unknown })?.body;
+  return b && typeof b === 'object' ? (b as Record<string, unknown>) : null;
+}
+
 export const api = {
   health: () => request<{ ok: boolean }>('GET', '/health'),
   nodeTypes: () => request<NodeType[]>('GET', '/node-types'),
   listDags: () => request<DagSummary[]>('GET', '/dags'),
   getDag: (dagId: string) =>
-    request<DesignerDag & { mtime: number }>('GET', `/dags/${encodeURIComponent(dagId)}`),
+    request<DesignerDag & { mtime: number; revision: string }>('GET', `/dags/${encodeURIComponent(dagId)}`),
   createDag: (dag: DesignerDag) => request<unknown>('POST', '/dags', dag),
-  updateDag: (dagId: string, dag: DesignerDag, clientMtime: number) =>
-    request<unknown>('PUT', `/dags/${encodeURIComponent(dagId)}`, { ...dag, client_mtime: clientMtime }),
-  deleteDag: (dagId: string) => request<unknown>('DELETE', `/dags/${encodeURIComponent(dagId)}`),
+  updateDag: (dagId: string, dag: DesignerDag, clientRevision: string) =>
+    request<DagMutationResult>('PUT', `/dags/${encodeURIComponent(dagId)}`, { ...dag, client_revision: clientRevision }),
+  deleteDag: (dagId: string, force = false) =>
+    request<unknown>('DELETE', `/dags/${encodeURIComponent(dagId)}${force ? '?force=true' : ''}`),
   validate: (dag: DesignerDag) => request<{ ok: boolean; errors: ValidationError[] }>('POST', '/validate', dag),
+
+  // ---------- 运行态 ----------
+  listRuns: (dagId: string, limit = 10) =>
+    request<{ runs: DagRun[] }>('GET', `/dags/${encodeURIComponent(dagId)}/runs?limit=${limit}`),
+  triggerDag: (dagId: string, conf?: Record<string, unknown>) =>
+    request<{ run_id: string; state: string }>(
+      'POST',
+      `/dags/${encodeURIComponent(dagId)}/trigger`,
+      conf ? { conf } : {},
+    ),
+  listTasks: (dagId: string, runId: string) =>
+    request<{ tasks: TaskStatus[] }>(
+      'GET',
+      `/dags/${encodeURIComponent(dagId)}/runs/${encodeURIComponent(runId)}/tasks`,
+    ),
+
+  // ---------- 版本历史 ----------
+  listVersions: (dagId: string) =>
+    request<{ versions: DagVersion[] }>('GET', `/dags/${encodeURIComponent(dagId)}/versions`),
+  getVersion: (dagId: string, versionId: string) =>
+    request<DagVersionDetail>(
+      'GET',
+      `/dags/${encodeURIComponent(dagId)}/versions/${encodeURIComponent(versionId)}`,
+    ),
+  rollbackDag: (dagId: string, versionId: string, clientRevision: string) =>
+    request<{ ok: boolean; version_id: string; restored_from: string }>(
+      'POST',
+      `/dags/${encodeURIComponent(dagId)}/rollback`,
+      { version_id: versionId, client_revision: clientRevision },
+    ),
+
+  // ---------- SQL 校验 ----------
+  checkSql: (sql: string, connId: string) =>
+    request<CheckSqlResult>('POST', '/check-sql', { sql, conn_id: connId }),
 };

@@ -1,0 +1,10 @@
+{
+  "table": "dm.daily_city_sales",
+  "comment": "schema 基线：由 docker/warehouse-init/01_init.sql 推出（data_type 取自 information_schema）",
+  "columns": {
+    "stat_date": "date",
+    "city": "text",
+    "order_cnt": "integer",
+    "total_amount": "numeric"
+  }
+}

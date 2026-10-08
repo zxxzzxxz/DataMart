@@ -1,0 +1,118 @@
+# 数据集市平台告警规则（Prometheus 评估，Alertmanager 负责路由）
+# 注意：alerting rules 中只有 annotations 支持模板，labels 必须是静态值
+groups:
+  # 链路自检：Watchdog 常鸣告警
+  - name: datamart-watchdog
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: info
+          service: monitoring
+        annotations:
+          summary: "常鸣告警：证明告警链路（Prometheus → Alertmanager → 告警中心）存活"
+          description: "该告警永远处于触发状态，在 Alertmanager 中路由到 deadman 接收器，每 5 分钟重复推送一次；若告警中心长时间收不到它，说明告警链路本身断了。"
+
+  # 平台组件可用性
+  - name: datamart-availability
+    rules:
+      # 任一抓取目标掉线超过 2 分钟（job 名通过模板带入通知内容）
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: "监控目标 {{ $labels.job }}（{{ $labels.instance }}）已掉线超过 2 分钟"
+
+      # 业务端点探测失败（blackbox 探针：apiserver / scheduler / 告警中心）
+      - alert: EndpointProbeFailed
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: platform
+        annotations:
+          summary: "端点 {{ $labels.instance }} 探测失败超过 2 分钟（服务无响应或健康检查未通过）"
+
+  # Postgres 流复制健康
+  - name: datamart-postgres-replication
+    rules:
+      # 主库上看不到任何流复制连接：备库掉线或未启动（单库无备部署下会持续触发，属预期提醒）
+      - alert: PostgresReplicationMissing
+        expr: absent(pg_stat_replication_pg_wal_lsn_diff)
+        for: 5m
+        labels:
+          severity: critical
+          service: postgres
+        annotations:
+          summary: "Postgres 流复制中断：主库检测不到任何备库连接（备库掉线或未启动）"
+
+      # 备库 WAL 落后超过 64MB（67108864 字节）
+      - alert: PostgresReplicationLagHigh
+        expr: pg_stat_replication_pg_wal_lsn_diff > 67108864
+        for: 5m
+        labels:
+          severity: warning
+          service: postgres
+        annotations:
+          summary: "Postgres 备库复制延迟过高：落后主库超过 64MB（当前 {{ $value | humanize1024 }}B）"
+
+  # Airflow 调度健康（原 Grafana 侧两条规则迁移至此，统一经 Alertmanager 路由）
+  - name: datamart-airflow
+    rules:
+      # 漏跑兜底：Scheduler 心跳消失（进程宕机 → 所有 DAG 都不会被调度）
+      - alert: AirflowSchedulerHeartbeatMissing
+        expr: absent(airflow_scheduler_heartbeat)
+        for: 2m
+        labels:
+          severity: critical
+          service: airflow
+        annotations:
+          summary: "Airflow Scheduler 超过 5 分钟无心跳，DAG 调度已停摆"
+
+      # 任务失败率：10 分钟内有任务进入 failed 终态
+      - alert: AirflowTaskFailures
+        expr: sum(increase(airflow_ti_finish{state="failed"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: airflow
+        annotations:
+          summary: "最近 10 分钟内有任务失败，请到 Airflow UI 查看"
+
+  # 备份与恢复演练（指标由备份/演练脚本推送到 Pushgateway）
+  - name: datamart-backup
+    rules:
+      # 超过 26 小时（93600 秒）没有成功备份：备份脚本可能中断
+      - alert: BackupStale
+        expr: time() - datamart_backup_last_success_timestamp_seconds > 93600
+        labels:
+          severity: warning
+          service: backup
+        annotations:
+          summary: "备份陈旧：超过 26 小时未产生成功备份，请检查备份脚本/定时任务"
+
+      # 恢复演练失败：备份不可恢复比没备份更危险
+      - alert: RestoreDrillFailed
+        expr: datamart_restore_drill_last_result == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+        annotations:
+          summary: "恢复演练失败：最新备份无法恢复（备份不可恢复比没备份更危险）"
+
+  # 数据质量（指标由 datamart_data_quality DAG 推送到 Pushgateway）
+  - name: datamart-data-quality
+    rules:
+      # 质检得分低于满分持续 15 分钟：有 error 级检查未通过（得分 = 通过检查数/总检查数）
+      - alert: DataQualityScoreLow
+        expr: datamart_dq_score < 1
+        for: 15m
+        labels:
+          severity: warning
+          service: data-quality
+        annotations:
+          summary: "数据质量套件 {{ $labels.table }} 得分 {{ $value }} 低于满分，存在未通过的质检规则（table 为 base64 分组键）"

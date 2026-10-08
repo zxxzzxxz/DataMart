@@ -1,0 +1,9 @@
+# Grafana 数据源：Loki 集中日志
+apiVersion: 1
+datasources:
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy          # 由 Grafana 后端代理转发，浏览器无需直连 loki
+    url: http://loki:3100
+    editable: true

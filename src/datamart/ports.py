@@ -1,0 +1,9 @@
+"""Small structural interfaces shared by domain services and database adapters."""
+
+from typing import Any, Protocol
+
+
+class QueryExecutor(Protocol):
+    def get_records(self, sql: str, parameters=None) -> list: ...
+    def get_first(self, sql: str, parameters=None) -> tuple | None: ...
+    def run(self, sql: str | list[str], parameters=None) -> Any: ...

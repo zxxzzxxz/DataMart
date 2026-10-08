@@ -1,0 +1,116 @@
+# staging 环境覆盖层（与基础 docker-compose.yaml 叠加使用）：
+#   docker compose -p datamart-staging -f docker-compose.yaml -f docker-compose.staging.yml up -d
+#
+# 设计目标：
+# - 与开发环境同机并存：项目名独立（-p datamart-staging → 容器/卷/网络全部带独立前缀，
+#   数据与开发环境隔离），对外端口整体平移（完整端口表见 docs/deployment.md）
+# - 验证「某版本镜像」而非本地源码构建：各自建服务的 image 指向
+#   ${IMAGE_REGISTRY}/<名称>:${IMAGE_TAG}（默认 latest）。正确用法是先 pull 再 up：
+#     IMAGE_TAG=1.2.3 docker compose -p datamart-staging -f docker-compose.yaml -f docker-compose.staging.yml pull
+#     IMAGE_TAG=1.2.3 docker compose -p datamart-staging -f docker-compose.yaml -f docker-compose.staging.yml up -d
+#   （基础文件仍带 build: 段，不先 pull 的话 compose 会用本地源码构建而不是注册表镜像）
+# - 密钥使用 staging 独立默认值（与开发/生产均不同；真实 staging 建议再用 .env 覆盖）
+#
+# environment 在多文件叠加时按键合并：此处只列 staging 差异项，其余环境变量保持基础文件不变。
+
+# staging 独立的 Airflow 密钥与对外地址（仅为 staging 默认值，生产禁止复用）
+x-airflow-staging-env: &airflow-staging-env
+  # staging 独立密钥（ Fernet 用于加密连接密码，JWT 用于 API 认证签名 ）
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-yK2CRSaA6NNbwPheWdkNXOibvPelAQIYVq-NNWdPPTA=}
+  AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-datamart-staging-jwt-secret-please-change}
+  # 统一入口改为 https://localhost:8443/（staging nginx 宿主端口 8443 → 容器 443）
+  AIRFLOW__API__BASE_URL: ${AIRFLOW_BASE_URL:-https://localhost:8443/}
+
+# 自建镜像的注册表引用约定（与 .github/workflows/cd.yml、scripts/release.sh 一致）：
+#   image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}<名称>:${IMAGE_TAG:-latest}
+# IMAGE_REGISTRY 为空时退化为本地镜像名（datamart-<名称>:latest），方便本机构建验证。
+services:
+  # ---------- PostgreSQL 高可用 ----------
+  postgres:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+  postgres-replica:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+
+  # 数据仓库主库：宿主机端口 15432 被开发环境占用，staging 平移到 25432。
+  # 注意 compose 多文件叠加时 ports 按 target 端口「合并」而非替换（prod 覆盖层的
+  # ports: [] 实际清不掉端口），必须用 !override 显式整体替换（需 compose ≥ 2.24.4）。
+  warehouse:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+    ports: !override
+      - "25432:5432"
+  warehouse-replica:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+
+  # ---------- Airflow 各组件（仅覆盖 staging 密钥与对外地址） ----------
+  airflow-apiserver:
+    environment: *airflow-staging-env
+  airflow-scheduler:
+    environment: *airflow-staging-env
+  airflow-dag-processor:
+    environment: *airflow-staging-env
+  airflow-worker:
+    environment: *airflow-staging-env
+  airflow-triggerer:
+    environment: *airflow-staging-env
+  airflow-init:
+    environment: *airflow-staging-env
+  flower:
+    environment: *airflow-staging-env
+
+  # ---------- 统一入口 ----------
+  # 端口整体平移，避开开发环境占用的 80/443/8443：
+  #   8080 → 80（HTTP，跳转 HTTPS）   8443 → 443（主入口 https://localhost:8443/）
+  #   8444 → 8443（DAG 设计器 https://localhost:8444/）
+  # 注意：staging 的 8443 与开发环境 nginx 的 8443（设计器）冲突，同机并存时
+  # 开发环境需先停用，或自行再平移 staging 端口（见 docs/deployment.md）。
+  # ports 用 !override 整体替换（多文件叠加默认按 target 合并，见 warehouse 处注释）。
+  nginx:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-nginx:${IMAGE_TAG:-latest}
+    ports: !override
+      - "8080:80"
+      - "8443:443"
+      - "8444:8443"
+
+  # ---------- 可观测性栈：外部 URL 跟随 staging 入口（command 是整体替换，需写全） ----------
+  prometheus:
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.external-url=https://localhost:8443/prometheus/"
+      - "--web.route-prefix=/prometheus/"
+
+  alertmanager:
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.external-url=https://localhost:8443/alertmanager/"
+      - "--web.route-prefix=/alertmanager/"
+
+  grafana:
+    environment:
+      # staging 独立管理员密码默认值（environment 按键合并，其余 GF_* 不变）
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin123-staging}
+      GF_SERVER_ROOT_URL: https://localhost:8443/grafana/
+
+  # ---------- 可视化 DAG 设计器 ----------
+  designer-api:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-designer-api:${IMAGE_TAG:-latest}
+    environment:
+      # staging 独立令牌默认值（与开发的 designer-dev-token 不同）
+      DESIGNER_TOKEN: ${DESIGNER_TOKEN:-designer-staging-token}
+  dag-designer:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-dag-designer:${IMAGE_TAG:-latest}
+
+  # ---------- 对象存储 ----------
+  # Console 开发的 9001 被占用，平移到 29001（仍只绑回环地址）；!override 理由同上
+  minio:
+    ports: !override
+      - "127.0.0.1:29001:9001"
+
+  # ---------- 灾备 ----------
+  postgres-backup:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres-backup:${IMAGE_TAG:-latest}
+  backup-shipper:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres-backup:${IMAGE_TAG:-latest}
+  restore-drill:
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres-backup:${IMAGE_TAG:-latest}

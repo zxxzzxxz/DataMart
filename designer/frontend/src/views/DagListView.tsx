@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errBodyErrors, errMessage, errStatus, isMock } from '../api';
+import { api, errBody, errBodyErrors, errMessage, errStatus, isMock } from '../api';
 import type { DagSummary } from '../types';
 
 const DAG_ID_RE = /^[a-z][a-z0-9_]*$/;
+
+interface DeleteConflict {
+  dagId: string;
+  detail: string;
+  activeRuns: number;
+}
 
 interface Props {
   onOpen: (dagId: string) => void;
@@ -15,6 +21,7 @@ export default function DagListView({ onOpen }: Props) {
   const [error, setError] = useState('');
   const [health, setHealth] = useState<boolean | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [conflict, setConflict] = useState<DeleteConflict | null>(null);
 
   const reload = useCallback(() => {
     setLoading(true);
@@ -40,7 +47,29 @@ export default function DagListView({ onOpen }: Props) {
       await api.deleteDag(dagId);
       reload();
     } catch (e) {
+      const st = errStatus(e);
+      if (st === 409) {
+        // 存在进行中的运行：展示 detail + active_runs，并提供强制删除入口
+        const body = errBody(e);
+        setConflict({
+          dagId,
+          detail: typeof body?.detail === 'string' ? body.detail : errMessage(e),
+          activeRuns: typeof body?.active_runs === 'number' ? body.active_runs : 0,
+        });
+        return;
+      }
       alert('删除失败：' + errMessage(e));
+    }
+  };
+
+  const forceRemove = async () => {
+    if (!conflict) return;
+    try {
+      await api.deleteDag(conflict.dagId, true);
+      setConflict(null);
+      reload();
+    } catch (e) {
+      alert('强制删除失败：' + errMessage(e));
     }
   };
 
@@ -116,6 +145,28 @@ export default function DagListView({ onOpen }: Props) {
 
       {showCreate && (
         <CreateDagModal onClose={() => setShowCreate(false)} onCreated={onOpen} />
+      )}
+      {conflict && (
+        <div className="modal-mask">
+          <div className="modal">
+            <h3>无法删除 DAG</h3>
+            <div className="conflict-box">
+              <div>{conflict.detail}</div>
+              <div>进行中运行：{conflict.activeRuns} 个</div>
+            </div>
+            <p className="muted" style={{ fontSize: 12 }}>
+              强制删除会终止这些运行并移除 DAG 定义，此操作不可恢复。
+            </p>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setConflict(null)}>
+                取消
+              </button>
+              <button className="btn force-delete-btn" onClick={forceRemove}>
+                仍然强制删除
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -3,6 +3,14 @@ name = "datamart"
 version = "0.1.0"
 description = "DataMart 数据集市调度平台（Apache Airflow 3）"
 requires-python = ">=3.12"
+dependencies = ["pydantic==2.13.5", "PyYAML==6.0.3", "croniter==6.2.4", "filelock==3.32.6"]
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/datamart"]
 
 [tool.ruff]
 target-version = "py312"
@@ -19,5 +27,9 @@ ignore = []
 # 测试文件允许断言风格自由一些
 "tests/*" = ["E501"]
 
+[tool.ruff.format]
+line-ending = "lf"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["postgres: isolated real PostgreSQL acceptance (DATAMART_TEST_DSN required)"]

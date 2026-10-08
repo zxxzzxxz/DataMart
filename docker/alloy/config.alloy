@@ -1,0 +1,94 @@
+// Grafana Alloy 日志采集配置（Promtail 的官方替代品；Promtail 已于 2026-03-02 官方 EOL）
+// 采集 Docker 容器 stdout/stderr + Airflow 任务日志文件，推送到 Loki。
+// 与 Promtail 时代保持一致的标签集：compose_service / compose_project / container / stream / dag_id / task_id，
+// Grafana Explore 中的既有查询无需改动。
+
+// ========== 推送目标：Loki ==========
+loki.write "loki" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
+
+// ========== 链路 1：Docker 容器 stdout/stderr ==========
+// 通过 docker.sock 发现容器；只保留带 compose service 标签的容器（compose 部署的服务），
+// 并把 compose service / project / 容器名 / 日志流提取为 Loki 标签，便于按服务查日志
+discovery.docker "containers" {
+	host             = "unix:///var/run/docker.sock"
+	refresh_interval = "5s"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	// 只保留带 com.docker.compose.service 标签的容器
+	//（docker meta 标签命名规则：容器 label 中的 . 和 - 统一转成 _）
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		regex         = "(.+)"
+		action        = "keep"
+	}
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "compose_service"
+	}
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		target_label  = "compose_project"
+	}
+	// 容器名去掉前导 / 作为标签
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+	// 日志流（stdout/stderr）作为标签
+	rule {
+		source_labels = ["__meta_docker_container_log_stream"]
+		target_label  = "stream"
+	}
+}
+
+loki.source.docker "containers" {
+	host             = "unix:///var/run/docker.sock"
+	targets          = discovery.relabel.containers.output
+	forward_to       = [loki.write.loki.receiver]
+	refresh_interval = "5s"
+}
+
+// ========== 链路 2：Airflow 任务日志文件 ==========
+// ./logs 挂载到 /var/log/airflow（只读）；Airflow 3 任务日志路径形如：
+// /var/log/airflow/dag_id=xxx/run_id=yyy/task_id=zzz/attempt=1.log
+local.file_match "airflow_task_logs" {
+	path_targets = [{
+		// ** 为递归通配（doublestar 语法）
+		__path__ = "/var/log/airflow/dag_id=*/**/*.log",
+		job      = "airflow-task-logs",
+	}]
+}
+
+loki.process "airflow_task_logs" {
+	// 从文件路径提取 dag_id / task_id。
+	// source 用 filename 标签（loki.source.file 自动附加，值为完整路径）；
+	// __path__ 是发现期内部标签，process 阶段取不到（Promtail 时代实测踩过的坑，同样适用）。
+	stage.regex {
+		source     = "filename"
+		expression = "^/var/log/airflow/dag_id=(?P<dag_id>[^/]+)/run_id=(?P<run_id>[^/]+)/task_id=(?P<task_id>[^/]+)/(?P<attempt>attempt=[0-9]+\\.log)$"
+	}
+
+	// 挂为 Loki 标签：dag_id、task_id
+	//（run_id 基数太高，故意不挂标签，需要时可在日志内容里检索）
+	stage.labels {
+		values = {
+			dag_id  = "",
+			task_id = "",
+		}
+	}
+
+	forward_to = [loki.write.loki.receiver]
+}
+
+loki.source.file "airflow_task_logs" {
+	targets    = local.file_match.airflow_task_logs.targets
+	forward_to = [loki.process.airflow_task_logs.receiver]
+}

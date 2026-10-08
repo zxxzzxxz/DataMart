@@ -1,0 +1,761 @@
+[
+  {
+    "type": "sql",
+    "label": "SQL 转换",
+    "operator": "airflow.providers.common.sql.operators.sql.SQLExecuteQueryOperator",
+    "fields": [
+      {
+        "name": "sql",
+        "label": "SQL 语句",
+        "kind": "textarea",
+        "required": true,
+        "default": null,
+        "options": null
+      },
+      {
+        "name": "conn_id",
+        "label": "数据库连接",
+        "kind": "select",
+        "required": false,
+        "default": "warehouse",
+        "options": [
+          "warehouse"
+        ]
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "sql": {
+          "title": "Sql",
+          "type": "string"
+        },
+        "conn_id": {
+          "const": "warehouse",
+          "default": "warehouse",
+          "title": "Conn Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "title": "SqlParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "sql_check",
+    "label": "数据校验",
+    "operator": "airflow.providers.common.sql.operators.sql.SQLValueCheckOperator",
+    "fields": [
+      {
+        "name": "sql",
+        "label": "校验 SQL（返回单值）",
+        "kind": "textarea",
+        "required": true,
+        "default": null,
+        "options": null
+      },
+      {
+        "name": "pass_value",
+        "label": "期望值（查询单值与其相等则通过）",
+        "kind": "text",
+        "required": true,
+        "default": null,
+        "options": null
+      },
+      {
+        "name": "conn_id",
+        "label": "数据库连接",
+        "kind": "select",
+        "required": false,
+        "default": "warehouse",
+        "options": [
+          "warehouse"
+        ]
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "sql": {
+          "title": "Sql",
+          "type": "string"
+        },
+        "conn_id": {
+          "const": "warehouse",
+          "default": "warehouse",
+          "title": "Conn Id",
+          "type": "string"
+        },
+        "pass_value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Pass Value"
+        }
+      },
+      "required": [
+        "sql",
+        "pass_value"
+      ],
+      "title": "SqlCheckParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "notify",
+    "label": "通知",
+    "operator": "airflow.providers.standard.operators.python.PythonOperator",
+    "fields": [
+      {
+        "name": "message",
+        "label": "消息内容",
+        "kind": "textarea",
+        "required": true,
+        "default": null,
+        "options": null
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "title": "NotifyParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "bash",
+    "label": "Bash 脚本",
+    "operator": "airflow.providers.standard.operators.bash.BashOperator",
+    "fields": [
+      {
+        "name": "bash_command",
+        "label": "Bash 命令",
+        "kind": "textarea",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "在 Airflow worker 容器内执行"
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "bash_command": {
+          "title": "Bash Command",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bash_command"
+      ],
+      "title": "BashParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "http",
+    "label": "HTTP 请求",
+    "operator": "airflow.providers.http.operators.http.HttpOperator",
+    "fields": [
+      {
+        "name": "endpoint",
+        "label": "请求地址",
+        "kind": "text",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "建议绝对 URL，相对路径需 http_default 连接"
+      },
+      {
+        "name": "method",
+        "label": "请求方法",
+        "kind": "select",
+        "required": false,
+        "default": "GET",
+        "options": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE"
+        ]
+      },
+      {
+        "name": "data",
+        "label": "请求体",
+        "kind": "textarea",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "可选，随请求发送的报文内容"
+      },
+      {
+        "name": "headers",
+        "label": "请求头",
+        "kind": "textarea",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "可选，JSON 字符串，如 {\"Authorization\":\"Bearer x\"}"
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "endpoint": {
+          "title": "Endpoint",
+          "type": "string"
+        },
+        "method": {
+          "default": "GET",
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data"
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        }
+      },
+      "required": [
+        "endpoint"
+      ],
+      "title": "HttpParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "sensor_sql",
+    "label": "SQL 传感器",
+    "operator": "airflow.providers.common.sql.sensors.sql.SqlSensor",
+    "fields": [
+      {
+        "name": "sql",
+        "label": "探测 SQL",
+        "kind": "textarea",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "返回空结果集=条件未满足，持续等待"
+      },
+      {
+        "name": "conn_id",
+        "label": "数据库连接",
+        "kind": "select",
+        "required": false,
+        "default": "warehouse",
+        "options": [
+          "warehouse"
+        ]
+      },
+      {
+        "name": "poke_interval",
+        "label": "探测间隔（秒）",
+        "kind": "number",
+        "required": false,
+        "default": 60,
+        "options": null
+      },
+      {
+        "name": "timeout",
+        "label": "超时时间（秒）",
+        "kind": "number",
+        "required": false,
+        "default": 3600,
+        "options": null
+      },
+      {
+        "name": "mode",
+        "label": "调度模式",
+        "kind": "select",
+        "required": false,
+        "default": "reschedule",
+        "options": [
+          "poke",
+          "reschedule"
+        ]
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "sql": {
+          "title": "Sql",
+          "type": "string"
+        },
+        "conn_id": {
+          "const": "warehouse",
+          "default": "warehouse",
+          "title": "Conn Id",
+          "type": "string"
+        },
+        "poke_interval": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "title": "Poke Interval",
+          "type": "integer"
+        },
+        "timeout": {
+          "default": 3600,
+          "exclusiveMinimum": 0,
+          "title": "Timeout",
+          "type": "integer"
+        },
+        "mode": {
+          "default": "reschedule",
+          "enum": [
+            "poke",
+            "reschedule"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "title": "SensorSqlParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "empty",
+    "label": "空任务（汇聚/占位）",
+    "operator": "airflow.providers.standard.operators.empty.EmptyOperator",
+    "fields": [
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        }
+      },
+      "title": "TaskParams",
+      "type": "object"
+    }
+  }
+]

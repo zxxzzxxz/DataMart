@@ -1,0 +1,67 @@
+# Loki 3.4.2 单实例（single-binary / monolithic）配置
+# 存储全部落本地文件系统（卷 loki-data 挂载 /loki），日志保留 14 天
+auth_enabled: false   # 内网单租户，关闭多租户鉴权
+
+server:
+  http_listen_port: 3100   # 推送/查询/指标端口（Prometheus 抓 /metrics）
+  grpc_listen_port: 9096   # 单实例内部组件 gRPC 通信
+  log_level: info
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1    # 单实例用回环地址即可
+    kvstore:
+      store: inmemory           # 单实例 ring 状态放内存，无需 consul/etcd
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks   # 日志块存储目录
+      rules_directory: /loki/rules     # 告警/记录规则存储目录
+
+# ingester：内存中的日志流攒块后刷盘
+ingester:
+  wal:
+    dir: /loki/wal              # 写前日志，崩溃后恢复未刷盘数据
+  chunk_idle_period: 30m        # 流 30 分钟无新日志即刷盘
+  chunk_retain_period: 1m       # 刷盘后内存再保留 1 分钟
+  max_chunk_age: 1h             # 单块最长存活 1 小时，到点强制刷盘
+  chunk_target_size: 1572864    # 目标块大小 1.5MB
+
+# 索引模式：TSDB（v13），Loki 3.x 单实例官方推荐
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h             # 索引按天切分
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/index        # 活跃索引写入目录
+    cache_location: /loki/index_cache          # 查询侧索引缓存
+
+# 查询结果缓存（内置内存缓存，单实例免 memcached）
+query_range:
+  results_cache:
+    cache:
+      embedded_cache:
+        enabled: true
+        max_size_mb: 100
+
+# compactor：索引压缩 + 日志保留（retention）执行者
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true              # 开启按 retention_period 清理过期日志
+  delete_request_store: filesystem     # 删除请求记录存文件系统（filesystem 存储下 retention 必需）
+  compaction_interval: 10m
+  retention_delete_delay: 2h           # 过期后延迟 2h 物理删除，留缓冲
+  retention_delete_worker_count: 150
+
+limits_config:
+  retention_period: 336h               # 日志保留 14 天（需配合 compactor.retention_enabled）
+  allow_structured_metadata: true      # Loki 3.x 结构化元数据（高基数字段建议走元数据而非标签）

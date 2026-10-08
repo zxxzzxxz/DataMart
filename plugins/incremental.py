@@ -1,6 +1,7 @@
 """增量抽取模板：水位线（watermark）模式。
 
-适用场景：源表带单调递增时间戳列（默认 updated_at）。
+遗留演示辅助函数：仅适用于按时间戳严格顺序提交、没有删除的源。
+生产 DAG 已改用 warehouse_pipeline 的事务变更日志；此函数不处理删除与迟到提交。
 
 标准用法（DAG 任务内）：
     1. cnt, new_wm = extract_incremental(CONN, "ods.orders", "dwh.stg_orders")
@@ -11,7 +12,7 @@
 
 边界语义：
 - 空增量：返回 (0, None)，commit_watermark 收到 None 直接跳过
-- 同一时刻多条记录：水位线取 max(updated_at)，下次用严格大于比较，不重不漏
+- 同时戳迟到记录可能被严格大于条件遗漏，因此禁止用于新的生产链路
 """
 
 import logging

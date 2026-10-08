@@ -1,0 +1,205 @@
+name: CD
+
+# ============================================================================
+# 发布流水线总览（一页话）
+#
+#   打 tag (scripts/release.sh → git push origin v1.2.3)
+#     └─> build-push   构建 6 个镜像并推送 ghcr.io/<owner>/<name>:<版本> 与 :latest
+#         └─> release  生成 GitHub Release（含镜像清单与部署命令）
+#             └─> deploy-staging  自动部署到 staging（tag 推送触发，无需审批）
+#
+#   手动部署生产：Actions → CD → Run workflow → environment=production
+#     └─> deploy-production  经 GitHub Environments 保护规则审批后执行
+#
+# 审批闸配置：仓库 Settings → Environments → 新建 staging / production 两个环境，
+# 在 production 上勾选 "Required reviewers" 并指定审批人——部署 job 会暂停等待审批，
+# 审批通过才运行 scripts/deploy.sh。staging 环境可不配审批人（自动通过）。
+#
+# 部署 job 使用 runs-on: self-hosted：需要一台能访问目标 Docker 主机的
+# self-hosted runner（仓库 Settings → Actions → Runners 注册）。没有可用 runner 时
+# job 会一直排队——这是有意设计：宁可部署挂起，也不把生产 Docker 主机暴露给
+# GitHub 托管 runner。
+# ============================================================================
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "目标环境（production 需 Environments 审批；staging 由 tag 推送自动部署）"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+
+permissions:
+  contents: read # 全局最小权限，需要更多权限的 job 单独声明
+
+jobs:
+  build-push:
+    name: 构建并推送镜像
+    if: github.event_name == 'push' # 仅 tag 推送时构建发布镜像
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # 推送 ghcr.io 所需（使用内置 GITHUB_TOKEN）
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      owner: ${{ steps.vars.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # version：tag 去掉 v 前缀（v1.2.3 → 1.2.3）；owner：ghcr 要求全小写
+      - id: vars
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 6 个构建上下文与镜像名约定（与 scripts/release.sh、docker-compose.staging.yml 一致）：
+      #   designer/backend → datamart-designer-api     designer/frontend → datamart-dag-designer
+      #   docker/postgres  → datamart-postgres         docker/backup     → datamart-postgres-backup
+      #   docker/nginx     → datamart-nginx            docker/airflow    → datamart-airflow
+      # 每个镜像打两个标签：<版本号>（去 v）与 latest；cache type=gha 跨 workflow 复用构建缓存。
+      - name: 构建并推送 datamart-designer-api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: designer/backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-designer-api:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-designer-api:latest
+          cache-from: type=gha,scope=designer-api
+          cache-to: type=gha,mode=max,scope=designer-api
+
+      - name: 构建并推送 datamart-dag-designer
+        uses: docker/build-push-action@v6
+        with:
+          context: designer/frontend
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-dag-designer:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-dag-designer:latest
+          cache-from: type=gha,scope=dag-designer
+          cache-to: type=gha,mode=max,scope=dag-designer
+
+      - name: 构建并推送 datamart-postgres
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/postgres
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-postgres:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-postgres:latest
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
+
+      - name: 构建并推送 datamart-postgres-backup
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/backup
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-postgres-backup:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-postgres-backup:latest
+          cache-from: type=gha,scope=postgres-backup
+          cache-to: type=gha,mode=max,scope=postgres-backup
+
+      - name: 构建并推送 datamart-nginx
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/nginx
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-nginx:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-nginx:latest
+          cache-from: type=gha,scope=nginx
+          cache-to: type=gha,mode=max,scope=nginx
+
+      - name: 构建并推送 datamart-airflow
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/airflow/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-airflow:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/datamart-airflow:latest
+          cache-from: type=gha,scope=airflow
+          cache-to: type=gha,mode=max,scope=airflow
+
+  release:
+    name: 生成 GitHub Release
+    if: github.event_name == 'push'
+    needs: build-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 创建 Release 所需
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## 镜像清单（已推送至 ghcr.io，均另有 `:latest` 标签）
+
+            - `ghcr.io/${{ needs.build-push.outputs.owner }}/datamart-designer-api:${{ needs.build-push.outputs.version }}`
+            - `ghcr.io/${{ needs.build-push.outputs.owner }}/datamart-dag-designer:${{ needs.build-push.outputs.version }}`
+            - `ghcr.io/${{ needs.build-push.outputs.owner }}/datamart-postgres:${{ needs.build-push.outputs.version }}`
+            - `ghcr.io/${{ needs.build-push.outputs.owner }}/datamart-postgres-backup:${{ needs.build-push.outputs.version }}`
+            - `ghcr.io/${{ needs.build-push.outputs.owner }}/datamart-nginx:${{ needs.build-push.outputs.version }}`
+            - `ghcr.io/${{ needs.build-push.outputs.owner }}/datamart-airflow:${{ needs.build-push.outputs.version }}`
+
+            ## 部署（目标 Docker 主机）
+
+            ```bash
+            git fetch --tags && git checkout v${{ needs.build-push.outputs.version }}
+            IMAGE_TAG=${{ needs.build-push.outputs.version }} docker compose pull
+            IMAGE_TAG=${{ needs.build-push.outputs.version }} docker compose up -d
+            ```
+
+            回滚到本版本：`scripts/rollback.sh ${{ needs.build-push.outputs.version }}`
+            （staging 验证：叠加 `docker-compose.staging.yml`，见 docs/deployment.md）
+          generate_release_notes: true
+
+  deploy-staging:
+    name: 部署 staging
+    if: github.event_name == 'push' # tag 推送时自动部署 staging
+    needs: [build-push, release]
+    runs-on: self-hosted # 见文件头注释：需要能访问目标 Docker 主机的 runner
+    environment: staging
+    permissions:
+      contents: read # checkout 拉取 scripts/deploy.sh 所需
+    steps:
+      - uses: actions/checkout@v4
+      - name: 部署 staging
+        run: scripts/deploy.sh staging
+        env:
+          IMAGE_TAG: ${{ needs.build-push.outputs.version }}
+          IMAGE_REGISTRY: ghcr.io/${{ needs.build-push.outputs.owner }}
+
+  deploy-production:
+    name: 部署 production
+    # 仅手动触发且选择 production；Environments 的 Required reviewers 即审批闸
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    runs-on: self-hosted
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: 部署 production
+        run: scripts/deploy.sh production
+        env:
+          IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+        # 部署版本由目标机 ./.env 中的 IMAGE_TAG 决定（scripts/rollback.sh 维护），
+        # 需要发布指定版本时先在目标机执行 rollback.sh <版本> 再触发本 job。

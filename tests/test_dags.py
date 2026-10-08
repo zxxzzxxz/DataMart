@@ -10,6 +10,8 @@ EXPECTED_DAGS = {
     "datamart_deadline_demo",
     "datamart_incremental_etl",
     "datamart_backfill",
+    "datamart_data_quality",
+    "datamart_publish_outbox",
 }
 
 
@@ -28,16 +30,11 @@ def test_all_dags_loaded(dag_bag):
 
 def test_etl_dag_structure(dag_bag):
     dag = dag_bag.dags["datamart_daily_etl"]
-    # 并行分支：start 的下游是抽取分组内的两个任务
-    start_downstream = {t.task_id for t in dag.get_task("start").downstream_list}
-    assert start_downstream == {"extract.extract_orders", "extract.extract_users"}
-    # 汇聚依赖：transform 的两个上游
-    transform_upstream = {t.task_id for t in dag.get_task("transform").upstream_list}
-    assert transform_upstream == {"extract.extract_orders", "extract.extract_users"}
-    # 主链：transform -> build -> check -> publish
-    assert {t.task_id for t in dag.get_task("build_mart").upstream_list} == {"transform"}
-    assert {t.task_id for t in dag.get_task("quality_check").upstream_list} == {"build_mart"}
-    assert {t.task_id for t in dag.get_task("publish_dataset").upstream_list} == {"quality_check"}
+    # 加工/质检是单一事务任务，失败时不得发布资产或确认 outbox。
+    assert {t.task_id for t in dag.get_task("apply_batch").upstream_list} == {"start"}
+    assert {t.task_id for t in dag.get_task("publish_dataset").upstream_list} == {"apply_batch"}
+    assert {t.task_id for t in dag.get_task("acknowledge_publication").upstream_list} == {"publish_dataset"}
+    assert not dag.get_task("apply_batch").outlets
 
 
 def test_retry_policy(dag_bag):
@@ -81,12 +78,8 @@ def test_deadline_alerts(dag_bag):
 
 def test_incremental_dag_structure(dag_bag):
     dag = dag_bag.dags["datamart_incremental_etl"]
-    # 并行抽取 -> 汇聚 merge
-    merge_upstream = {t.task_id for t in dag.get_task("merge_to_dwh").upstream_list}
-    assert merge_upstream == {"extract.extract_orders_incr", "extract.extract_users_incr"}
-    # 水位线提交必须在质检之后（不丢数语义）
-    assert {t.task_id for t in dag.get_task("commit_watermarks").upstream_list} == {"quality_check"}
-    # staging 共享，禁止并发运行
+    assert dag.get_task("apply_batch").op_kwargs == {"mode": "incremental"}
+    assert {t.task_id for t in dag.get_task("publish_dataset").upstream_list} == {"apply_batch"}
     assert dag.max_active_runs == 1
     # 增量 DAG 与主 DAG 发布同一数据资产（报表联动）
     incr_outlets = {o.uri for t in dag.tasks for o in (t.outlets or [])}
@@ -96,5 +89,33 @@ def test_incremental_dag_structure(dag_bag):
 def test_backfill_dag(dag_bag):
     dag = dag_bag.dags["datamart_backfill"]
     assert dag.schedule is None  # 仅手动触发
-    # 补跑完成后必须刷新日报
-    assert {t.task_id for t in dag.get_task("refresh_report").upstream_list} == {"backfill_range"}
+    assert dag.get_task("apply_batch").op_kwargs == {"mode": "backfill"}
+    assert {t.task_id for t in dag.get_task("publish_dataset").upstream_list} == {"apply_batch"}
+
+
+def test_publication_recovery_and_failure_gate(dag_bag):
+    for dag_id in (
+        "datamart_daily_etl",
+        "datamart_incremental_etl",
+        "datamart_backfill",
+        "datamart_publish_outbox",
+    ):
+        dag = dag_bag.dags[dag_id]
+        assert dag.get_task("publish_dataset").trigger_rule == "all_success"
+        assert dag.get_task("acknowledge_publication").trigger_rule == "all_success"
+        assert {t.task_id for t in dag.get_task("acknowledge_publication").upstream_list} == {
+            "publish_dataset"
+        }
+        # 每一个叶节点都必须保持失败传播，不能用 all_done 将失败 DAG 伪装成功。
+        assert all(task.trigger_rule == "all_success" for task in dag.leaves)
+    dispatcher = dag_bag.dags["datamart_publish_outbox"]
+    assert {t.task_id for t in dispatcher.get_task("publish_dataset").upstream_list} == {"load_outbox"}
+
+
+def test_consumers_are_read_only_audits(dag_bag):
+    from pipeline_tasks import audit_published
+
+    for dag_id in ("datamart_daily_report", "datamart_data_quality"):
+        tasks = dag_bag.dags[dag_id].tasks
+        assert len(tasks) == 1
+        assert tasks[0].python_callable == audit_published

@@ -1,0 +1,56 @@
+# Dependabot 依赖更新：每周检查一次，超限额的 PR 排队等上一批合并后再开。
+version: 2
+
+updates:
+  # 根目录 Python 依赖（requirements.txt：airflow、dag-factory、pytest 等）
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # DAG 设计器后端（designer/backend/requirements.txt：fastapi、uvicorn 等）
+  - package-ecosystem: pip
+    directory: /designer/backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # DAG 设计器前端（designer/frontend/package.json）
+  - package-ecosystem: npm
+    directory: /designer/frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # 自建镜像的基础镜像（Dockerfile FROM 行）
+  - package-ecosystem: docker
+    directory: /docker/postgres
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /docker/backup
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /docker/nginx
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /docker/airflow
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # GitHub Actions 版本（.github/workflows/*.yml）
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+dist/
+**/node_modules/
+**/.vitest/
+dags/.designer-locks/
 
 # Airflow 运行产物
 logs/
@@ -12,6 +16,9 @@ simple_auth_manager_passwords.json.generated
 
 # 本地配置 / 密钥
 .env
+docker/nginx/certs/
+designer/users.json
+docker/vault/keys.json
 
 # IDE
 .idea/

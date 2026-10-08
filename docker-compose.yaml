@@ -1,189 +1,358 @@
+# DataMart 数仓基础设施
+# 用法:
+#   cp .env.example .env   # 首次使用,按需修改密码与域名
+#   docker compose up -d
+#
+# 包含: Airflow 3(CeleryExecutor,核心组件双副本) + PostgreSQL 16(元数据/数仓,各带流复制备库)
+#       + Redis + MinIO(对象存储/备份异地副本) + Vault(密钥管理,可选启用)
+#       + Keycloak(SSO,可选启用) + Flyway(数仓迁移版本管理)
+#       + Prometheus + Pushgateway + Alertmanager + Blackbox Exporter + Grafana + Loki + Alloy
+
 x-airflow-common: &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.1}
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-airflow:${IMAGE_TAG:-latest}
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:-airflow}@postgres/airflow
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
-    # Fernet 密钥：用于加密存储连接密码等敏感信息（生产环境请换成独立生成的值并保密）
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:${POSTGRES_PASSWORD:-airflow}@postgres/airflow
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-WrZlRScMD8Iq1SJmgKOBvWEfXozYZEJ7qe-55dSOJ4E=}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-datamart-dev-jwt-secret-please-change}
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:-datamart-dev-jwt-secret-please-change}
-    # Worker 通过内部域名回调 API Server 上报状态（Task SDK 执行 API）
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
-    # 开启 Scheduler 健康检查 HTTP 服务（供容器 healthcheck 探测 8974 端口）
-    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    # 在 UI 的 Admin -> Config 页面展示当前配置（配置界面）
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Shanghai
+    # 统一入口(nginx)地址;执行 API 走内网直连 apiserver(多副本由 docker DNS 轮询)
+    AIRFLOW__API__BASE_URL: https://localhost/
     AIRFLOW__API__EXPOSE_CONFIG: 'true'
-    # FAB 认证管理器：提供用户/角色/权限管理 UI（Admin -> Security）
-    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    # UI 时区（默认 UTC，如需东八区可改成 Asia/Shanghai）
-    AIRFLOW__CORE__DEFAULT_TIMEZONE: ${AIRFLOW__CORE__DEFAULT_TIMEZONE:-Asia/Shanghai}
-    # 数据仓库连接（UI 的 Admin -> Connections 中可见，DAG 通过 conn_id="warehouse" 使用）
-    AIRFLOW_CONN_WAREHOUSE: postgresql://warehouse:warehouse@warehouse:5432/warehouse
-    # 项目级变量（UI 的 Admin -> Variables 中可见）
-    # 告警 webhook：默认指向内置告警中心（http://localhost:9099），生产换成企业微信/飞书机器人地址
-    AIRFLOW_VAR_DATAMART_ALERT_WEBHOOK: ${DATAMART_ALERT_WEBHOOK:-http://alert-webhook:9099/alert}
-    # StatsD 指标：发送到 statsd-exporter，再由 Prometheus 采集（Grafana 看板 :3000）
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # 指标: StatsD -> statsd-exporter -> Prometheus
     AIRFLOW__METRICS__STATSD_ON: 'true'
     AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
     AIRFLOW__METRICS__STATSD_PORT: '8125'
     AIRFLOW__METRICS__STATSD_PREFIX: airflow
-    # 容器启动时安装 dag-factory：渲染 dags/designer/*.yaml（可视化 DAG 设计器的 YAML 事实源）
-    _PIP_ADDITIONAL_REQUIREMENTS: dag-factory
-  volumes:
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # 数仓连接与告警 Webhook(env 方式注入,幂等优先于 metastore)
+    AIRFLOW_CONN_WAREHOUSE: postgresql://warehouse:${WAREHOUSE_PASSWORD:-warehouse}@warehouse:5432/warehouse?connect_timeout=10&keepalives=1&keepalives_idle=30&keepalives_interval=10&keepalives_count=3&target_session_attrs=read-write
+    AIRFLOW_VAR_DATAMART_ALERT_WEBHOOK: ${ALERT_WEBHOOK_URL:-http://alert-webhook:9099/alert}
+    # 反向代理(nginx)后的正确 URL 构造;OAuth 经 nginx 跳转必需
+    AIRFLOW__FAB__ENABLE_PROXY_FIX: 'true'
+    # 可选 SSO: 设为 true 后启用 Keycloak 登录(见 docs/sso.md;默认 AUTH_DB 本地账号不受影响)
+    AIRFLOW_OAUTH_ENABLED: ${AIRFLOW_OAUTH_ENABLED:-false}
+    OAUTH_CLIENT_ID: ${OAUTH_CLIENT_ID:-airflow-web}
+    OAUTH_CLIENT_SECRET: ${OAUTH_CLIENT_SECRET:-datamart-dev-client-secret}
+    # 可选密钥后端: .env 中设为 airflow.providers.hashicorp.secrets.vault.VaultBackend 启用;
+    # 空字符串 = 未配置,Airflow 走默认 环境变量/metastore。Vault 不可达时 Airflow 记日志并回退。
+    AIRFLOW__SECRETS__BACKEND: ${AIRFLOW_SECRETS_BACKEND:-}
+    AIRFLOW__SECRETS__BACKEND_KWARGS: '{"connections_path": "connections", "variables_path": "variables", "mount_point": "secret", "url": "http://vault:8200", "token": "${VAULT_TOKEN:-}", "kv_engine_version": 2}'
+  volumes: &airflow-common-volumes
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./config:/opt/airflow/config
     - ./plugins:/opt/airflow/plugins
     - ./tests:/opt/airflow/tests
-  user: "${AIRFLOW_UID:-50000}:0"
+    # FAB webserver 配置(AUTH_DB/AUTH_OAUTH 由 AIRFLOW_OAUTH_ENABLED 切换)
+    - ./config/webserver_config.py:/opt/airflow/webserver_config.py:ro
+  # 以 root 运行,挂载目录(dags/logs 等)写权限与现网保持一致
+  user: "0:0"
   depends_on: &airflow-common-depends-on
     redis:
-      condition: service_started
+      condition: service_healthy
     postgres:
       condition: service_healthy
     warehouse:
       condition: service_healthy
+    flyway:
+      condition: service_completed_successfully
+
+# 资源限额锚点(deploy.resources.limits 是硬上限不是预留):按负载画像分配,防止单组件失控挤占整机
+x-res-xs: &res-xs   # 代理/导出器/拨测等轻量组件
+  resources:
+    limits: {cpus: '0.25', memory: 128M}
+x-res-s: &res-s     # 中间件/日志管道
+  resources:
+    limits: {cpus: '0.5', memory: 256M}
+x-res-m: &res-m     # 常规服务
+  resources:
+    limits: {cpus: '0.5', memory: 512M}
+x-res-l: &res-l     # 数据库/Airflow 核心组件(单副本)
+  resources:
+    limits: {cpus: '1.0', memory: 1G}
+x-res-xl: &res-xl   # 任务执行者(单副本)
+  resources:
+    limits: {cpus: '2.0', memory: 2G}
 
 services:
+  # ---------- 元数据 PostgreSQL 16(主) ----------
   postgres:
-    image: postgres:16
+    build: ./docker/postgres
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     environment:
       POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
       POSTGRES_DB: airflow
+      # 流复制账号:init-primary/00-replication.sh 在 initdb 时创建
+      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+      # 主库参数(含 archive_command 指向 /walarchive);备库 promote 后沿用同一配置
+      - ./docker/postgres/primary.conf:/etc/postgresql/postgresql.conf:ro
+      - pg-wal-archive-airflow:/walarchive
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: pg_isready -U airflow
       interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 5s
-    restart: always
+    networks: [datamart]
+    deploy: *res-l
+    restart: unless-stopped
 
-  # 数据仓库：ods 源层 / dwh 明细层 / dm 集市层（宿主机可用 psql -p 15432 直连查看）
+  # ---------- 元数据 PostgreSQL 16(备库,流复制) ----------
+  postgres-replica:
+    build: ./docker/postgres
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+    # 镜像内备库入口:等待主库就绪 -> pg_basebackup -> 以 standby 启动
+    entrypoint: /usr/local/bin/replica-entrypoint.sh
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: airflow
+      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator}
+      PRIMARY_HOST: postgres
+    volumes:
+      - postgres-replica-volume:/var/lib/postgresql/data
+      # 同一 primary.conf:promote 后直接以主库参数(含归档)接管
+      - ./docker/postgres/primary.conf:/etc/postgresql/postgresql.conf:ro
+      - pg-wal-archive-airflow:/walarchive
+    healthcheck:
+      test: pg_isready -U airflow
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-l
+    restart: unless-stopped
+
+  # ---------- 数仓 PostgreSQL 16(主) ----------
   warehouse:
-    image: postgres:16
+    build: ./docker/postgres
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     environment:
       POSTGRES_USER: warehouse
-      POSTGRES_PASSWORD: warehouse
+      POSTGRES_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
       POSTGRES_DB: warehouse
+      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator}
     ports:
+      # 宿主机直连数仓(开发调试);prod 覆盖层以 !override 关闭
       - "15432:5432"
     volumes:
       - warehouse-db-volume:/var/lib/postgresql/data
-      - ./docker/warehouse-init:/docker-entrypoint-initdb.d:ro
+      - ./docker/postgres/primary.conf:/etc/postgresql/postgresql.conf:ro
+      # 数仓初始化 SQL(文件级挂载,打入镜像的 00-replication.sh 不受影响)
+      - ./docker/warehouse-init/01_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - pg-wal-archive-warehouse:/walarchive
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "warehouse"]
+      test: pg_isready -U warehouse
       interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 5s
-    restart: always
+    networks: [datamart]
+    deploy: *res-l
+    restart: unless-stopped
 
-  redis:
-    image: redis:7.2-bookworm
-    expose:
-      - 6379
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 30s
-      retries: 50
-      start_period: 30s
-    restart: always
-
-  # Web UI 入口：http://localhost:8080 （admin / admin123）
-  airflow-apiserver:
-    <<: *airflow-common
-    command: api-server
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
-
-  # 调度器：2 副本高可用（多 Scheduler 共享元数据库自动分片协调，任一宕机另一个无缝接管）
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    deploy:
-      replicas: 2
+  # ---------- 数仓 PostgreSQL 16(备库,流复制) ----------
+  warehouse-replica:
+    build: ./docker/postgres
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres:${IMAGE_TAG:-latest}
+    entrypoint: /usr/local/bin/replica-entrypoint.sh
     environment:
-      <<: *airflow-common-env
-      # 容器启动时自动安装 dag-factory（common 环境已含，此处因 merge 覆盖需重复）与 pytest（容器内跑 DAG 测试，见 README「运行测试」）
-      _PIP_ADDITIONAL_REQUIREMENTS: "dag-factory pytest"
+      POSTGRES_USER: warehouse
+      POSTGRES_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
+      POSTGRES_DB: warehouse
+      POSTGRES_REPLICATION_USER: ${POSTGRES_REPLICATION_USER:-replicator}
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator}
+      PRIMARY_HOST: warehouse
+    volumes:
+      - warehouse-replica-volume:/var/lib/postgresql/data
+      - ./docker/postgres/primary.conf:/etc/postgresql/postgresql.conf:ro
+      - pg-wal-archive-warehouse:/walarchive
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
-      interval: 30s
-      timeout: 10s
+      test: pg_isready -U warehouse
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 30s
-    restart: always
     depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+      warehouse:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-l
+    restart: unless-stopped
 
-  # Airflow 3 中负责解析 DAG 文件的独立组件
-  airflow-dag-processor:
-    <<: *airflow-common
-    command: dag-processor
+  # ---------- 数仓迁移版本管理(Flyway;启动即 migrate,幂等) ----------
+  flyway:
+    image: flyway/flyway:13.9.0
+    command: migrate
+    environment:
+      FLYWAY_URL: jdbc:postgresql://warehouse:5432/warehouse
+      FLYWAY_USER: warehouse
+      FLYWAY_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
+      FLYWAY_SCHEMAS: public
+      # 已有历史数据的库首次接入:以 baseline 方式纳入版本管理
+      FLYWAY_BASELINE_ON_MIGRATE: 'true'
+      FLYWAY_VALIDATE_ON_MIGRATE: 'true'
+      FLYWAY_OUT_OF_ORDER: 'false'
+    volumes:
+      - ./docker/warehouse-migrations:/flyway/sql:ro
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-m
+    restart: "no"
+
+  # ---------- PostgreSQL 逻辑备份(每日 pg_dump + 保留策略 + 指标推送) ----------
+  postgres-backup:
+    build: ./docker/backup
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres-backup:${IMAGE_TAG:-latest}
+    entrypoint: ["/bin/bash"]
+    command:
+      - -c
+      - while true; do /usr/local/bin/backup.sh; sleep "$${BACKUP_INTERVAL_SECONDS:-86400}"; done
+    environment:
+      AIRFLOW_DB_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:-replicator}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      warehouse:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-m
+    restart: unless-stopped
+
+  # ---------- 备份/WAL 归档异地副本同步(MinIO) ----------
+  backup-shipper:
+    build: ./docker/backup
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres-backup:${IMAGE_TAG:-latest}
+    entrypoint: ["/bin/bash", "/usr/local/bin/ship-to-minio.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      SHIP_INTERVAL_SECONDS: ${SHIP_INTERVAL_SECONDS:-60}
+    volumes:
+      - ./backups:/backups:ro
+      - pg-wal-archive-airflow:/walarchive-airflow
+      - pg-wal-archive-warehouse:/walarchive-warehouse
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-m
+    restart: unless-stopped
+
+  # ---------- 恢复演练(手动触发:docker compose --profile drill run --rm restore-drill) ----------
+  restore-drill:
+    build: ./docker/backup
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-postgres-backup:${IMAGE_TAG:-latest}
+    profiles: ["drill"]
+    entrypoint: ["/bin/bash", "/usr/local/bin/restore-drill.sh"]
+    environment:
+      PUSHGATEWAY_URL: http://pushgateway:9091
+    volumes:
+      # 演练日志写回 /backups/restore-drill.log,需 rw
+      - ./backups:/backups
+    networks: [datamart]
+    deploy: *res-m
+    restart: "no"
+
+  # ---------- MinIO 对象存储(备份异地副本) ----------
+  # 社区版已停发(2025-10 起仅存量 CVE 修复,功能冻结),钉在最后社区版;替代评估见 docs/deployment.md
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      # 开放 /minio/v2/metrics 供 Prometheus 免认证抓取
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    ports:
+      # 控制台仅绑宿主机回环;S3 API(9000)仅容器网络内访问
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
+      test: curl -f http://localhost:9000/minio/health/live
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+    networks: [datamart]
+    deploy: *res-l
+    restart: unless-stopped
 
-  # Celery worker：真正执行任务（默认 2 副本并行，可加 --scale airflow-worker=N 再扩）
-  airflow-worker:
-    <<: *airflow-common
-    command: celery worker
-    deploy:
-      replicas: 2
+  # ---------- Redis(Celery Broker;AOF 每秒刷盘) ----------
+  redis:
+    image: redis:7.2.14-bookworm
+    command: redis-server --appendonly yes --appendfsync everysec --save 60 1000
+    volumes:
+      - redis-data:/data
     healthcheck:
-      test: ["CMD-SHELL", 'celery --broker redis://:@redis:6379/0 inspect ping -d celery@$$HOSTNAME']
-      interval: 30s
-      timeout: 10s
+      test: redis-cli ping
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+    networks: [datamart]
+    deploy: *res-m
+    restart: unless-stopped
 
-  airflow-triggerer:
-    <<: *airflow-common
-    command: triggerer
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.93.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-xs
+    restart: unless-stopped
+
+  # ---------- Vault(密钥管理;仅容器网络,Airflow secrets backend 可选启用) ----------
+  vault:
+    image: hashicorp/vault:2.0.3
+    command: vault server -config=/vault/config/config.hcl
+    cap_add: [IPC_LOCK]
+    environment:
+      # 容器内 CLI(vault-init.sh 经 compose exec 调用)默认走 HTTPS,显式指到 HTTP 监听地址
+      VAULT_ADDR: http://127.0.0.1:8200
+    volumes:
+      - ./docker/vault/config.hcl:/vault/config/config.hcl:ro
+      - vault-data:/vault/file
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
+      # uninitok: 未初始化也算存活(等 scripts/vault-init.sh);密封状态才判不健康
+      test: wget -q -O /dev/null "http://127.0.0.1:8200/v1/sys/health?standbyok=true&uninitok=true" || exit 1
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+    networks: [datamart]
+    deploy: *res-s
+    restart: unless-stopped
 
-  # 首次启动时初始化数据库并创建管理员账号
+  # ---------- Airflow 初始化(官方 entrypoint 魔法:迁移 + 建管理员后退出) ----------
   airflow-init:
     <<: *airflow-common
     entrypoint: /bin/bash
@@ -192,29 +361,134 @@ services:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true'
-      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
-      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin123}
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin123}
+    networks: [datamart]
+    deploy: *res-m
 
-  # Celery worker 监控界面：http://localhost:5555
-  flower:
+  # ---------- Airflow API Server(双副本) ----------
+  airflow-apiserver:
     <<: *airflow-common
-    command: celery flower
-    ports:
-      - "5555:5555"
+    command: api-server
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
+      test: curl --fail http://localhost:8080/api/v2/monitor/health
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
-    restart: always
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+      vault:
+        condition: service_started
+    networks: [datamart]
+    deploy:
+      <<: *res-l
+      replicas: 2
+    restart: always
 
-  # ---------- 可观测性栈 ----------
-  # StatsD -> Prometheus 指标转换器（接收 Airflow 指标，暴露 9102 供采集）
+  # ---------- Airflow Scheduler(双副本,原生 HA) ----------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: curl --fail http://localhost:8974/health
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+      vault:
+        condition: service_started
+    networks: [datamart]
+    deploy:
+      <<: *res-l
+      replicas: 2
+    restart: always
+
+  # ---------- Airflow Worker(双副本,按队列负载弹性伸缩进程) ----------
+  airflow-worker:
+    <<: *airflow-common
+    # 弹性:空闲收缩到 MIN 个省资源,高峰自动扩到 MAX 个提速
+    command: celery worker --autoscale=${CELERY_AUTOSCALE_MAX:-8},${CELERY_AUTOSCALE_MIN:-2}
+    healthcheck:
+      test: celery --broker redis://:@redis:6379/0 inspect ping -d celery@$$HOSTNAME
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+      vault:
+        condition: service_started
+    networks: [datamart]
+    deploy:
+      <<: *res-xl
+      replicas: 2
+    restart: always
+
+  # ---------- Airflow Triggerer(双副本) ----------
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks: [datamart]
+    deploy:
+      <<: *res-l
+      replicas: 2
+    restart: always
+
+  # ---------- Airflow Dag Processor(双副本) ----------
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    healthcheck:
+      test: airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks: [datamart]
+    deploy:
+      <<: *res-l
+      replicas: 2
+    restart: always
+
+  # ---------- Flower(Celery 监控) ----------
+  flower:
+    <<: *airflow-common
+    command: celery flower --url-prefix=flower
+    healthcheck:
+      test: curl --fail http://localhost:5555/flower/
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+    networks: [datamart]
+    deploy: *res-m
+    restart: always
+
+  # ---------- StatsD Exporter(Airflow 指标 -> Prometheus) ----------
   statsd-exporter:
     image: prom/statsd-exporter:v0.28.0
     command:
@@ -222,95 +496,263 @@ services:
       - "--statsd.listen-udp=:8125"
     volumes:
       - ./docker/statsd-exporter/mapping.yaml:/mapping/mapping.yaml:ro
+    healthcheck:
+      test: wget --spider -S "http://localhost:9102/metrics" -T 60 2>&1 || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [datamart]
+    deploy: *res-xs
     restart: always
 
-  # 指标存储与查询：http://localhost:9090
+  # ---------- Prometheus(指标采集与告警评估) ----------
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.13.1
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=15d"
+      # 子路径透传:external-url 对外,route-prefix 让 UI 静态资源/API 自洽
+      - "--web.external-url=https://localhost/prometheus/"
+      - "--web.route-prefix=/prometheus/"
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
-    ports:
-      - "9090:9090"
+    networks: [datamart]
+    deploy: *res-l
     restart: always
 
-  # 看板与告警规则：http://localhost:3000 （admin / admin123）
-  grafana:
-    image: grafana/grafana:12.1.0
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin123}
+  # ---------- Pushgateway(备份/恢复演练等一次性指标推送) ----------
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    command:
+      - "--persistence.file=/persistence/metrics.data"
+      - "--persistence.interval=5m"
     volumes:
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana-data:/var/lib/grafana
-    ports:
-      - "3000:3000"
+      - pushgateway-data:/persistence
+    networks: [datamart]
+    deploy: *res-xs
     restart: always
-    depends_on:
-      - prometheus
 
-  # 告警中心（真实 webhook 通道）：http://localhost:9099
+  # ---------- Alertmanager(告警路由/通知) ----------
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.external-url=https://localhost/alertmanager/"
+      - "--web.route-prefix=/alertmanager/"
+    volumes:
+      - ./docker/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    networks: [datamart]
+    deploy: *res-xs
+    restart: always
+
+  # ---------- Blackbox Exporter(HTTP/TCP 拨测,Prometheus v3 兼容) ----------
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    volumes:
+      - ./docker/blackbox-exporter/config.yml:/etc/blackbox_exporter/config.yml:ro
+    networks: [datamart]
+    deploy: *res-xs
+    restart: always
+
+  # ---------- 告警 Webhook 接收器(告警落盘到 alert-data 卷) ----------
   alert-webhook:
     image: python:3.12-alpine
     command: python /app/receiver.py
     volumes:
       - ./docker/alert-webhook/receiver.py:/app/receiver.py:ro
       - alert-data:/data
-    ports:
-      - "9099:9099"
+    networks: [datamart]
+    deploy: *res-xs
     restart: always
 
-  # ---------- 可视化 DAG 设计器 ----------
-  # 后端 API：读写 dags/designer/*.yaml（唯一事实源），经 dag-factory 渲染进 Airflow。
-  # 不暴露宿主端口，由 dag-designer（前端 nginx）反代 /api 访问。
-  designer-api:
-    build: ./designer/backend
+  # ---------- Grafana(仪表盘;子路径 /grafana/) ----------
+  grafana:
+    image: grafana/grafana:13.1.1
     environment:
-      DAGS_DIR: /data/dags
-      PLUGINS_DIR: /data/plugins
-      DESIGNER_TOKEN: ${DESIGNER_TOKEN:-designer-dev-token}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin123}
+      GF_SERVER_ROOT_URL: https://localhost/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: 'true'
     volumes:
-      - ./dags:/data/dags
-      - ./plugins:/data/plugins:ro
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks: [datamart]
+    deploy: *res-m
     restart: always
 
-  # 前端界面：http://localhost:8081（nginx 托管 React 构建产物，反代 /api 到 designer-api:8000）
-  dag-designer:
-    build: ./designer/frontend
+  # ---------- Loki(日志聚合) ----------
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./docker/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks: [datamart]
+    deploy: *res-s
+    restart: always
+
+  # ---------- Grafana Alloy(日志采集:Airflow 文件日志 + Docker 容器日志 -> Loki) ----------
+  # Promtail 已于 2026-03-02 官方 EOL,Alloy 为官方替代品(配置见 docker/alloy/config.alloy)
+  alloy:
+    image: grafana/alloy:v1.20.1
+    command:
+      - run
+      # 与 Promtail 时代同端口:Prometheus 抓 /metrics 无需改端口;Alloy UI 也在此端口
+      - --server.http.listen-addr=0.0.0.0:9080
+      # 采集位置持久化(卷 alloy-data,重启后断点续采)
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./logs:/var/log/airflow:ro
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy-data:/var/lib/alloy/data
+    networks: [datamart]
+    deploy: *res-s
+    restart: always
+
+  # ---------- Nginx 反向代理(统一入口,TLS 终结) ----------
+  nginx:
+    build: ./docker/nginx
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-nginx:${IMAGE_TAG:-latest}
     ports:
-      - "8081:80"
+      - "80:80"
+      - "443:443"
+      # 可视化 DAG 设计器独立端口(避免子路径破坏 SPA base path)
+      - "8443:8443"
+    volumes:
+      # nginx.conf 已 COPY 进镜像;证书由 scripts/gen-certs.sh 生成后只读挂载
+      - ./docker/nginx/certs:/etc/nginx/certs:ro
+    healthcheck:
+      # 用 127.0.0.1:alpine 的 localhost 可能解析到 ::1 而 nginx 只监听 IPv4
+      test: wget --no-check-certificate -q -O /dev/null https://127.0.0.1/ || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
-      - designer-api
+      - airflow-apiserver
+      - grafana
+      - flower
+      - dag-designer
+      - keycloak
+    networks: [datamart]
+    deploy: *res-xs
     restart: always
 
-  # ---------- 灾备 ----------
-  # 数据库定时备份：默认每天一次 pg_dump（airflow 元数据库 + warehouse 业务库），
-  # 输出到 ./backups，每库保留最近 BACKUP_KEEP 份。手动立即备份：scripts/backup.sh；恢复：scripts/restore.sh
-  postgres-backup:
-    image: postgres:16
-    entrypoint: /bin/bash
-    command: -c 'while true; do /usr/local/bin/backup.sh; sleep "$${BACKUP_INTERVAL_SECONDS:-86400}"; done'
+  # ---------- Keycloak(SSO;Airflow FAB OAuth 可选启用,见 docs/sso.md) ----------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: start-dev --import-realm
     environment:
-      BACKUP_KEEP: ${BACKUP_KEEP:-7}
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
-      AIRFLOW_DB_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
-      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_PASSWORD:-warehouse}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_ENABLED: 'true'
+      # 与 nginx 的 /keycloak/ 子路径透传对齐
+      KC_HTTP_RELATIVE_PATH: /keycloak
+      KC_HOSTNAME: https://localhost/keycloak
+      KC_PROXY_HEADERS: xforwarded
+      # 暴露 9000 管理端口的 /health/* 探针(compose healthcheck 用)
+      KC_HEALTH_ENABLED: 'true'
     volumes:
-      - ./docker/backup/backup.sh:/usr/local/bin/backup.sh:ro
-      - ./backups:/backups
+      - ./docker/keycloak:/opt/keycloak/data/import:ro
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      # 管理端口 9000 的就绪探针(镜像无 curl,用 bash /dev/tcp);
+      # 注意 KC_HTTP_RELATIVE_PATH=/keycloak 同样作用于管理端口,探针路径要带前缀
+      test: >-
+        bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000
+        && echo -e "GET /keycloak/health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
+        && grep -q "200" <&3'
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [datamart]
+    deploy: *res-l
+    restart: unless-stopped
+
+  # ---------- PostgreSQL Exporter(元数据库指标,含流复制) ----------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://airflow:${POSTGRES_PASSWORD:-airflow}@postgres:5432/airflow?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
-      warehouse:
-        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-xs
     restart: always
+
+  # ---------- DAG Designer API(可视化 DAG 设计器后端) ----------
+  designer-api:
+    build:
+      context: .
+      dockerfile: designer/backend/Dockerfile
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-designer-api:${IMAGE_TAG:-latest}
+    environment:
+      DAGS_DIR: /data/dags
+      PLUGINS_DIR: /data/plugins
+      # 多用户账号文件(bcrypt 哈希);用 scripts/designer-add-user.sh 生成。
+      # 文件缺失时自动回退到单 token 模式(DESIGNER_TOKEN,等价 admin 角色)
+      DESIGNER_USERS_FILE: /app/users.json
+      DESIGNER_TOKEN: ${DESIGNER_TOKEN:-designer-dev-token}
+      # 会话签名密钥:生产必须显式设置;缺省回退 DESIGNER_TOKEN(仅开发可接受)
+      DESIGNER_AUTH_SECRET: ${DESIGNER_AUTH_SECRET:-}
+      # 操作审计日志(JSONL,审计与 Airflow 日志共用 logs 目录树)
+      DESIGNER_AUDIT_LOG: /data/audit/designer-audit.jsonl
+      # Airflow REST API(运行监控/触发/进行中运行检查;多副本 DNS 轮询)
+      AIRFLOW_API_URL: http://airflow-apiserver:8080
+      AIRFLOW_API_USERNAME: ${AIRFLOW_ADMIN_USER:-admin}
+      AIRFLOW_API_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin123}
+      # SQL 预检(EXPLAIN)目标库
+      WAREHOUSE_DSN: postgresql://warehouse:${WAREHOUSE_PASSWORD:-warehouse}@warehouse:5432/warehouse
+      # DAG 版本历史快照目录(每 DAG 保留最新 20 份)
+      DESIGNER_HISTORY_DIR: /data/history
+    volumes:
+      - ./dags:/data/dags
+      - ./plugins:/data/plugins:ro
+      - ./designer/users.json:/app/users.json
+      - ./logs/designer-audit:/data/audit
+      - ./logs/designer-history:/data/history
+    networks: [datamart]
+    deploy: *res-m
+    restart: always
+
+  # ---------- DAG Designer 前端(静态资源,nginx 托管) ----------
+  dag-designer:
+    build: ./designer/frontend
+    image: ${IMAGE_REGISTRY:+${IMAGE_REGISTRY}/}datamart-dag-designer:${IMAGE_TAG:-latest}
+    depends_on:
+      - designer-api
+    networks: [datamart]
+    deploy: *res-xs
+    restart: always
+
+networks:
+  datamart:
+    driver: bridge
 
 volumes:
   postgres-db-volume:
+  postgres-replica-volume:
   warehouse-db-volume:
+  warehouse-replica-volume:
+  pg-wal-archive-airflow:
+  pg-wal-archive-warehouse:
+  minio-data:
+  redis-data:
+  vault-data:
+  keycloak-data:
   prometheus-data:
+  alertmanager-data:
+  pushgateway-data:
   grafana-data:
+  loki-data:
+  alloy-data:
   alert-data:

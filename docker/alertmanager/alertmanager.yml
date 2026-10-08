@@ -1,0 +1,83 @@
+# Alertmanager v0.28.1 —— 告警中枢路由配置
+# 告警流向：Prometheus / Grafana → Alertmanager（分组/去重/静默/抑制）→ 自研告警中心（alert-webhook）
+
+# 根路由：所有告警默认进入告警中心
+route:
+  receiver: alert-center
+  # 按 告警名 + 严重级别 + 来源 job 分组，同组告警合并为一条通知
+  group_by: ["alertname", "severity", "job"]
+  group_wait: 30s      # 首条告警等待 30s 凑组，避免逐条轰炸
+  group_interval: 5m   # 同组新增告警至少间隔 5m 再通知
+  repeat_interval: 4h  # 未恢复的告警每 4h 重复提醒一次
+  routes:
+    # critical 告警：重复提醒频率提高到 1h
+    - matchers:
+        - severity = "critical"
+      receiver: alert-center
+      repeat_interval: 1h
+    # Watchdog 常鸣告警：路由到 deadman 接收器，5 分钟重复一次；
+    # 告警中心能持续收到它，即证明整条告警链路存活
+    - matchers:
+        - alertname = "Watchdog"
+      receiver: deadman
+      repeat_interval: 5m
+
+# 抑制规则：同一 alertname+job 的 critical 触发时，抑制对应的 warning，避免重复通知
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname", "job"]
+
+receivers:
+  # 主接收器：自研告警中心（POST /alert 收任意 JSON 原样落盘，GET / 展示页面）
+  - name: alert-center
+    webhook_configs:
+      - url: http://alert-webhook:9099/alert
+        send_resolved: true   # 恢复也通知，告警闭环可见
+
+  # 死信开关（dead man's switch）接收器：payload 落盘即证明链路通
+  - name: deadman
+    webhook_configs:
+      - url: http://alert-webhook:9099/alert
+        send_resolved: false  # Watchdog 永不恢复，无需 resolved 通知
+
+# ==================== 扩展指引 ====================
+#
+# 1) 邮件通知（email_configs）
+#    在文件顶部加 global 段配置 SMTP 全局参数，再给 receiver 加 email_configs：
+#
+#    global:
+#      smtp_smarthost: "smtp.example.com:465"
+#      smtp_from: "alertmanager@example.com"
+#      smtp_auth_username: "alertmanager@example.com"
+#      smtp_auth_password: "xxxx"
+#      smtp_require_tls: true
+#
+#    receivers:
+#      - name: alert-center
+#        email_configs:
+#          - to: "dba@example.com"
+#            send_resolved: true
+#
+# 2) 企业微信 / 飞书机器人
+#    a) 企业微信「应用消息」：v0.28 原生支持 wechat_configs：
+#         wechat_configs:
+#           - corp_id: "wwxxxx"
+#             agent_id: "1000002"
+#             api_secret: "xxxx"
+#             to_user: "@all"
+#             message: '{{ template "wechat.default.message" . }}'
+#    b) 企业微信「群机器人 webhook」或「飞书机器人」原生不支持，两种接法：
+#       - 推荐：维持现状发到自研 alert-webhook，由它转换 payload 后转发机器人 webhook（链路统一）；
+#       - 或部署开源适配器（如 prometheus-webhook-feishu），Alertmanager 再指到适配器地址。
+#
+# 3) 值班表 / 排班 oncall
+#    Alertmanager 本身无排班概念，建议接 Grafana OnCall（OSS）或 PagerDuty：
+#    新建一个 webhook receiver 指向 OnCall 的 Alertmanager 集成地址，
+#    排班、升级策略（escalation）、电话/短信通知都在 OnCall/PagerDuty 侧配置。
+#
+# 4) 静默（silences）
+#    存于 alertmanager-data 卷的 /alertmanager 目录（compose 已挂载），重启不丢；
+#    通过 https://localhost/alertmanager/ 页面或 amtool 创建。

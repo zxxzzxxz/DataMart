@@ -1,0 +1,10 @@
+# Blackbox Exporter 探针配置：HTTP 存活性探测
+# 用于对「返回 JSON/HTML 而非 Prometheus 指标」的端点做 liveness 监控
+#（Prometheus v3 抓取非指标响应会判 down，业务端点一律改走 probe）
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4   # 容器网络为 IPv4
+      # 默认 2xx 即成功，不校验 body（各端点健康语义由其自身状态码表达）

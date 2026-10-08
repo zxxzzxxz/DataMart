@@ -1,4 +1,11 @@
 apiVersion: 1
+# 清理历史的 contact point（告警已统一迁移到 Prometheus 规则 → 外置 Alertmanager 路由）
+deleteContactPoints:
+  - orgId: 1
+    uid: datamart-alertmanager
+# 兜底 contact point：平台自身的告警规则全部在 Prometheus 侧评估（docker/prometheus/rules/），
+# 经外置 Alertmanager 统一分组/静默/路由。本 webhook 仅为在 Grafana UI 手动新建规则时
+# 保留的一个直连告警中心的备用通道。
 contactPoints:
   - orgId: 1
     name: datamart-webhook

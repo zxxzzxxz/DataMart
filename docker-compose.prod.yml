@@ -2,22 +2,27 @@
 #   docker compose -f docker-compose.yaml -f docker-compose.prod.yml up -d
 #
 # 与开发的差异：
-# - 三个密钥/密码改为强制传入（缺少时 compose 直接报错，拒绝带默认值启动）
+# - 密钥/密码改为强制传入（缺少时 compose 直接报错，拒绝带默认值启动）
 # - 数据仓库端口不再暴露到宿主机
+# - MinIO Console 不再暴露（对象存储仅容器网络内访问）
 # - Worker 扩到 4 副本
+#
+# environment 在多文件叠加时按键合并：此处只补充生产强制项，基础文件中的其余环境变量保持不变。
 
 x-airflow-prod-env: &airflow-prod-env
   AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?生产环境必须提供 AIRFLOW__CORE__FERNET_KEY}
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?生产环境必须提供 AIRFLOW__API_AUTH__JWT_SECRET}
   _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?生产环境必须提供 _AIRFLOW_WWW_USER_PASSWORD}
 
+# PG 流复制账号口令：主库/备库/备份服务必须一致，生产强制传入
+x-pg-repl-prod-env: &pg-repl-prod-env
+  POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:?生产环境必须提供 POSTGRES_REPLICATION_PASSWORD}
+
 services:
   airflow-apiserver:
     environment: *airflow-prod-env
   airflow-scheduler:
-    environment:
-      <<: *airflow-prod-env
-      _PIP_ADDITIONAL_REQUIREMENTS: "dag-factory pytest"
+    environment: *airflow-prod-env
   airflow-dag-processor:
     environment: *airflow-prod-env
   airflow-worker:
@@ -31,6 +36,30 @@ services:
   flower:
     environment: *airflow-prod-env
 
-  # 生产环境不对宿主机暴露数据仓库端口（仅容器网络内访问）
+  postgres:
+    environment: *pg-repl-prod-env
+  postgres-replica:
+    environment: *pg-repl-prod-env
   warehouse:
-    ports: []
+    environment: *pg-repl-prod-env
+    # 生产环境不对宿主机暴露数据仓库端口（仅容器网络内访问）
+    # 注意:多文件叠加时 ports 是合并而非替换,必须用 !override 才能清空基础文件的映射
+    ports: !override []
+  warehouse-replica:
+    environment: *pg-repl-prod-env
+  postgres-backup:
+    environment: *pg-repl-prod-env
+
+  # 对象存储管理员密码：生产强制传入（minio 与 backup-shipper 必须一致）
+  minio:
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?生产环境必须提供 MINIO_ROOT_PASSWORD}
+      MINIO_PROMETHEUS_AUTH_TYPE: public
+    # 生产不暴露 Console（仅容器网络内访问 S3 API）
+    # 注意:多文件叠加时 ports 是合并而非替换,必须用 !override 才能清空基础文件的映射
+    ports: !override []
+  backup-shipper:
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?生产环境必须提供 MINIO_ROOT_PASSWORD}

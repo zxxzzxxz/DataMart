@@ -1,0 +1,13 @@
+.git
+.env
+.venv
+**/node_modules
+**/dist
+**/__pycache__
+.pytest_cache
+.ruff_cache
+logs
+backups
+designer/users.json
+docker/vault/keys.json
+docker/nginx/certs

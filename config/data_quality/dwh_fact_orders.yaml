@@ -1,0 +1,39 @@
+# dwh.fact_orders（订单事实明细表）质检套件
+# 表结构（docker/warehouse-init/01_init.sql）：
+#   order_id INT PK / user_id INT / user_name TEXT / city TEXT / amount NUMERIC(10,2)
+#   status TEXT / order_date DATE / etl_date DATE
+table: dwh.fact_orders
+severity_threshold: 1.0
+baseline: dwh.fact_orders # baselines/dwh.fact_orders.json，做 schema 漂移检查
+allow_extra_columns: true
+
+checks:
+  # 允许合法的空源（如业务数据全部删除）；完整性由事务流水线逐行对账保证
+  - type: row_count
+    min: 0
+    severity: error
+
+  # 主键语义：order_id 唯一，重复说明 merge/upsert 逻辑出错
+  - type: unique
+    columns: [order_id]
+    severity: error
+
+  # status 是业务关键枚举列，空值无法参与集市聚合
+  - type: null_rate
+    column: status
+    max_pct: 0
+    severity: error
+
+  # 事务发布时非法状态阻止整批提交；发布后的审计只读，不移动已发布数据
+  - type: accepted_values
+    column: status
+    values: [paid, cancel, refund]
+    quarantine: true
+    severity: error
+
+  # etl_date 是入库日期：长期没有新行入库说明增量链路停摆。
+  # 演示环境源数据静置后会自然滞后，故只告警不判失败
+  - type: freshness
+    date_column: etl_date
+    max_lag_days: 2
+    severity: warn

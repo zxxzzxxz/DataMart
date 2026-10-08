@@ -1,4 +1,10 @@
-fastapi
-uvicorn
-pydantic>=2
-pyyaml
+fastapi==0.142.2
+uvicorn==0.54.0
+pydantic==2.13.5
+pyyaml==6.0.3
+# fastapi TestClient 依赖（后端单测用）
+httpx==0.28.1
+# SQL 预检(EXPLAIN)PostgreSQL 驱动
+psycopg2-binary==2.9.13
+croniter==6.2.4
+filelock==3.32.6

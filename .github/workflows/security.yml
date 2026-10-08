@@ -1,0 +1,166 @@
+name: Security
+
+# 安全扫描流水线：
+# - trivy-fs     仓库文件系统扫描（requirements / Dockerfile / compose / 配置 / 密钥泄露）
+# - python-sca   pip-audit 依赖已知漏洞审计 + bandit 代码安全扫描
+# - trivy-image  构建 6 个本地镜像并逐个做镜像漏洞扫描
+# 门禁原则：CRITICAL 直接失败；HIGH 只报告（见 trivy-fs 内注释）。不允许 || true 放水，
+# 确认无风险的命中用行内豁免（bandit `# nosec` / trivy .trivyignore，均须写明理由）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 每周一 03:00 UTC：定期重扫，基础镜像与依赖的新 CVE 也能被拦下
+    - cron: "0 3 * * 1"
+
+jobs:
+  trivy-fs:
+    name: Trivy 文件系统扫描
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # 上传 SARIF 到 Code Scanning 所需
+    steps:
+      - uses: actions/checkout@v4
+
+      # 第一次扫描：CRITICAL + HIGH 全量报告（表格输出，exit-code 0 只报告不阻断）
+      - name: Trivy 全量报告（CRITICAL + HIGH，只报告）
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig # 覆盖依赖漏洞、硬编码密钥、Dockerfile/compose 误配置
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: "0"
+
+      # 第二次扫描：SARIF 输出并上传到 GitHub Code Scanning（Security 标签页集中跟踪）
+      - name: Trivy 生成 SARIF 报告
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "0"
+
+      # 注意：Code Scanning 对 public 仓库免费；private 仓库需要 GitHub Advanced Security
+      # 许可，否则上传会 403。continue-on-error 兜底：上传失败不影响下面的门禁结果。
+      - name: 上传 SARIF 到 Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: trivy-results.sarif
+
+      # 门禁扫描：仅 CRITICAL，存在即失败（exit-code 1）。
+      # ignore-unfixed：没有修复版本的 CRITICAL 不阻断（修复了也装不上，只能等上游），
+      # 已修复但未升级的 CRITICAL 必须处理——升级依赖或在 .trivyignore 中写明豁免理由。
+      - name: Trivy 门禁（CRITICAL 失败）
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  python-sca:
+    name: Python 依赖与代码安全审计
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # 与 ci.yml 对齐
+
+      - name: 安装审计工具
+        run: pip install pip-audit bandit
+
+      # pip-audit：对照 OSV/PyPA 漏洞库审计两份 requirements 中锁定/声明的依赖，
+      # --strict：任何已知漏洞（含间接依赖）都返回非零，直接失败。
+      # 确有误报/不可修复时：pip-audit --ignore-vuln GHSA-xxxx-yyyy-zzzz，并在命令旁注释理由，
+      # 不要全局放水。
+      - name: pip-audit 依赖漏洞审计
+        run: pip-audit -r requirements.txt -r designer/backend/requirements.txt --strict
+
+      # bandit：扫描业务代码中的危险用法（subprocess shell、硬编码密码、yaml.load 等），
+      # -ll 表示 medium 及以上严重度即失败。
+      # 确认无风险的命中：在该行加 `# nosec Bxxx —— 理由`（精确到规则号），逐条豁免。
+      - name: bandit 代码安全扫描（medium 及以上失败）
+        run: bandit -r src dags plugins designer/backend -x tests -ll
+
+  trivy-image:
+    name: Trivy 镜像扫描
+    runs-on: ubuntu-latest
+    timeout-minutes: 40 # 6 个镜像构建 + 扫描（airflow 基础镜像较大），留足余量
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # 构建 6 个自建镜像（与 cd.yml 的发布构建同一批上下文，保证扫的就是发的）
+      - name: 构建本地镜像
+        run: |
+          docker build -f designer/backend/Dockerfile -t datamart-local/designer-api:ci .
+          docker build -t datamart-local/dag-designer:ci designer/frontend
+          docker build -t datamart-local/postgres:ci docker/postgres
+          docker build -t datamart-local/postgres-backup:ci docker/backup
+          docker build -t datamart-local/nginx:ci docker/nginx
+          docker build -f docker/airflow/Dockerfile -t datamart-local/airflow:ci .
+
+      # 逐个扫描，severity CRITICAL 门禁：存在（且上游已发布修复版本）即失败。
+      # HIGH 级别由 trivy-fs 的报告与 Code Scanning 跟踪，不在此重复门禁。
+      - name: 扫描 designer-api
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: datamart-local/designer-api:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: 扫描 dag-designer
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: datamart-local/dag-designer:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: 扫描 postgres
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: datamart-local/postgres:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: 扫描 postgres-backup
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: datamart-local/postgres-backup:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: 扫描 nginx
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: datamart-local/nginx:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: 扫描 airflow
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: datamart-local/airflow:ci
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

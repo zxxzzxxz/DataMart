@@ -4,13 +4,18 @@
 #   .venv\Scripts\activate
 #   pip install -r requirements.txt
 #
-# 注意版本需与 docker-compose.yaml 中的 AIRFLOW_IMAGE_NAME 保持一致。
-apache-airflow==3.3.1
+# 注意版本需与 docker/airflow/Dockerfile 中的 FROM apache/airflow 保持一致。
+apache-airflow==3.3.2
+-e .
 pendulum>=3.0
 
 # 可视化 DAG 设计器：渲染 dags/designer/*.yaml（需 v1.x 才兼容 Airflow 3；
 # 该包不在 Airflow 官方 constraints 文件中，CI 带 constraints 安装不影响）
-dag-factory>=1.0,<2.0
+dag-factory==1.1.0
+apache-airflow-providers-http==6.1.0
 
 # 测试
 pytest>=8.0
+# PostgreSQL 双驱动验收，覆盖 Airflow PostgresHook 的 psycopg3 自动选择路径。
+psycopg[binary]>=3.1,<4
+psycopg2-binary>=2.9,<3

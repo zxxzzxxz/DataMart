@@ -1,0 +1,14 @@
+{
+  "table": "dwh.fact_orders",
+  "comment": "schema 基线：由 docker/warehouse-init/01_init.sql 推出（data_type 取自 information_schema）",
+  "columns": {
+    "order_id": "integer",
+    "user_id": "integer",
+    "user_name": "text",
+    "city": "text",
+    "amount": "numeric",
+    "status": "text",
+    "order_date": "date",
+    "etl_date": "date"
+  }
+}

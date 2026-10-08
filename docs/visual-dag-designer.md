@@ -1,6 +1,6 @@
 # 可视化 DAG 设计器 — 功能规划与技术设计
 
-> 状态：MVP 已完成并验收（2026-09-08）。第 2/3 期待开发，见 §6 路线图。
+> 状态：MVP（第 1 期）已于 2026-09-08 验收；第 2 期已于 2026-10-02 完成（试跑触发/运行状态回显/删除保护/任务级 trigger_rule 与 retries/版本历史/SQL 预检，节点类型扩至 7 种；增量同步与 Python 函数节点仍未做）。剩余路线见 §6。
 > 本文档是开发的蓝图与基线，后续分期实施必须达到对应验收标准。
 
 ## 1. 目标与边界
@@ -82,19 +82,23 @@ compose 新增一个服务 `dag-designer`（后端 uvicorn + 前端构建产物�
 - 端口 `8081`
 - 与 Airflow 通过内部网络通信（调 `http://airflow-apiserver:8080/api/v2`）
 
-## 4. 节点类型目录（v1 五种，可扩展）
+## 4. 节点类型目录（当前 7 种，可扩展）
 
 | 节点类型 | 底层实现 | 关键参数 |
 |---|---|---|
-| SQL 转换 | SQLExecuteQueryOperator（conn=warehouse） | SQL 语句、目标表 |
-| 增量同步 | 复用 `plugins/incremental.py` 水位线框架 | 源表、目标表、水位列 |
-| 数据校验 | SQL 检查（行数/非空/唯一性断言） | 表、校验规则、阈值 |
-| Python 函数 | 预注册函数库（`plugins/designer/functions.py`）下拉选择 | 函数名、JSON 参数 |
-| 通知 | 复用 `plugins/alerting.py` webhook | 消息模板 |
+| SQL 转换 | SQLExecuteQueryOperator（conn=warehouse） | SQL 语句 |
+| 数据校验 | SQLValueCheckOperator | SQL、期望值 |
+| 通知 | PythonOperator（固定 webhook，复用 `plugins/alerting.py`） | 消息模板 |
+| Bash | BashOperator | bash_command（worker 容器内执行） |
+| HTTP | HttpOperator | endpoint（建议绝对 URL）、method、data、headers |
+| SQL 传感器 | SQLSensor（common.sql provider） | sql、poke_interval、timeout、mode |
+| 占位 | EmptyOperator | 无（汇聚/分组占位） |
 
-新增节点类型 = 在 `node_catalog.py` 注册一条 + 底层 operator/函数实现，前端零改动（表单由 schema 驱动）。
+所有节点类型共享两个可选高级字段：`trigger_rule`（all_success/all_done/all_failed/none_failed/one_success/one_failed/none_skipped）与任务级 `retries`（留空继承 DAG 级）。
 
-DAG 级能力：调度 cron、重试次数/间隔、失败告警开关（默认开，走既有告警中心）、trigger_rule（默认 all_success，可选 all_done）。
+尚未实现（路线图）：增量同步节点（复用 `plugins/incremental.py` 水位线框架）、Python 函数节点（预注册函数库下拉选择）。
+
+新增节点类型 = 在 `plugins/dag_designer/catalog.py` 注册一条 + 底层 operator 实现，前端零改动（表单由 schema 驱动）。
 
 ## 5. YAML 存储格式示例
 
@@ -128,16 +132,18 @@ orders_daily:
 - designer-ui：画布 + 属性表单 + 保存/加载/删除/新建
 - compose 服务接入，端口 8081
 
-**第 2 期（约 1 周）**
-- 增量同步 + Python 函数节点类型
-- 试跑触发 + 运行状态回显画布
-- DAG 级：重试/告警/trigger_rule 配置面板
-- 删除保护（有正在运行的实例时禁止删除）
+**第 2 期（已完成，2026-10-02）**
+- ~~试跑触发 + 运行状态回显画布~~ ✅ 画布内触发（可带 conf）+ 任务状态着色 + 轮询收敛
+- ~~删除保护（有正在运行的实例时禁止删除）~~ ✅ 运行中删除返回 409，可确认后强制删除
+- ~~trigger_rule 配置面板~~ ✅ 任务级 trigger_rule + retries（schema 驱动表单自动生效）
+- ~~版本历史~~ ✅ 文件快照式（保存/回滚自动快照，保留 20 份，可预览/回滚；非 git log 实现）
+- SQL 预检（EXPLAIN 预执行校验，防"画对了跑错"）✅
+- 未做：增量同步 + Python 函数节点类型（保留至后续）
 
 **第 3 期（按需）**
-- 版本历史（git log 读出 YAML 历史版本，可对比/回滚）
 - 模板库（把现有 6 个 Python DAG 沉淀为可复用模板）
-- 对接 FAB 认证、操作审计日志
+- 对接 FAB 认证（当前为独立三角色 RBAC + 审计 JSONL，已满足多用户管控）
+- 任务组（TaskGroup）嵌套、动态任务映射（dag-factory 表达力边界，见 §8）
 
 ## 7. 验收标准
 

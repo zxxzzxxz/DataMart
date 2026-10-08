@@ -1,8 +1,119 @@
+# Prometheus 主配置
+# 告警流向：Prometheus 评估规则 → Alertmanager（分组/去重/静默/抑制）→ 自研告警中心（alert-webhook）
+
 global:
-  scrape_interval: 15s
+  scrape_interval: 15s      # 默认抓取间隔
+  evaluation_interval: 15s  # 告警规则评估间隔
+
+# 告警规则文件（compose 将 ./docker/prometheus/rules 挂载到 /etc/prometheus/rules）
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# 告警发送目标：Alertmanager 告警中枢
+# 注意：alertmanager 配置了 --web.route-prefix=/alertmanager/，API 随之迁移，
+# 必须带 path_prefix，否则通知 POST 404（曾实测踩坑）
+alerting:
+  alertmanagers:
+    - path_prefix: /alertmanager/
+      static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
-  # Airflow 指标（经 statsd-exporter 转换）
+  # Airflow 运行指标（statsd-exporter 将 Airflow statsd 指标转换为 Prometheus 格式）
   - job_name: airflow
     static_configs:
       - targets: ["statsd-exporter:9102"]
+
+  # Airflow API Server 存活性探测（/api/v2/monitor/health 返回 JSON，Prometheus v3
+  # 不接受非指标响应，故经 blackbox-exporter 探测；probe_success=1 即存活。
+  # 多副本：目标主机名由 blackbox 侧解析，docker DNS 轮询覆盖副本）
+  - job_name: probe-airflow-apiserver
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://airflow-apiserver:8080/api/v2/monitor/health"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Airflow Scheduler 存活性探测（/health 返回 JSON，同样走 blackbox 探针；
+  # 调度级心跳另有 statsd 指标 airflow_scheduler_heartbeat 由告警规则覆盖）
+  - job_name: probe-airflow-scheduler
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://airflow-scheduler:8974/health"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # 自研告警中心存活性探测（GET / 返回 HTML，同样走 blackbox 探针）
+  - job_name: probe-alert-webhook
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://alert-webhook:9099/"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # Prometheus 自监控（route-prefix=/prometheus/ 后 /metrics 随之迁移到前缀下）
+  - job_name: prometheus
+    metrics_path: /prometheus/metrics
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Alertmanager 自监控（同理，route-prefix=/alertmanager/）
+  - job_name: alertmanager
+    metrics_path: /alertmanager/metrics
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  # Loki 集中日志服务指标
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  # Alloy 日志采集指标（采了多少行、推送失败率等；Alloy 为 Promtail 官方替代品）
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:9080"]
+
+  # MinIO 对象存储集群指标（MINIO_PROMETHEUS_AUTH_TYPE=public，无需认证）
+  - job_name: minio
+    metrics_path: /minio/v2/metrics/cluster
+    scheme: http
+    static_configs:
+      - targets: ["minio:9000"]
+
+  # Postgres 数据库指标（经 postgres-exporter，含流复制延迟 pg_stat_replication_*）
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # Redis 指标（经 redis-exporter，Celery broker 存活与队列长度）
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  # Pushgateway：备份/恢复演练等批处理脚本推送的结果指标
+  # honor_labels 保留脚本侧上报的 job/instance 标签，避免被本 job 覆盖
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]

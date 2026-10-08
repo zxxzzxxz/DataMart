@@ -1,0 +1,47 @@
+# dm.daily_city_sales（每日城市销售集市）质检套件
+# 表结构（docker/warehouse-init/01_init.sql）：
+#   stat_date DATE / city TEXT / order_cnt INT / total_amount NUMERIC(12,2)，主键 (stat_date, city)
+table: dm.daily_city_sales
+severity_threshold: 1.0 # 任何 error 检查未过即不达标（得分 = 通过/总数）
+baseline: dm.daily_city_sales # baselines/dm.daily_city_sales.json，做 schema 漂移检查
+allow_extra_columns: true # 集市层演进加列不放行失败，仅记录
+
+checks:
+  # 空源或全部取消订单是合法状态；流水线会核验与事实层聚合完全一致
+  - type: row_count
+    min: 0
+    severity: error
+
+  # 主键语义：(stat_date, city) 必须唯一，重复说明汇总逻辑出错（如重复插入）
+  - type: unique
+    columns: [stat_date, city]
+    severity: error
+
+  # 城市是聚合维度，空值意味着 dwh 层打宽时 users 关联异常
+  - type: null_rate
+    column: city
+    max_pct: 0
+    severity: error
+
+  # 日报数据不能滞后：最新统计日期距今天超过 2 天说明 ETL 停摆或源端断流。
+  # 演示数据集是静态的,故只告警不判失败(与 dwh 套件对齐),接入实时源后可调回 error
+  - type: freshness
+    date_column: stat_date
+    max_lag_days: 2
+    severity: warn
+
+  # 金额/单量不可能为负或零（负数说明源端脏数据或聚合溢出）
+  - type: custom_sql
+    name: non_positive_amount
+    sql: SELECT * FROM dm.daily_city_sales WHERE total_amount < 0 OR order_cnt <= 0
+    expect: empty
+    severity: error
+
+  # 跨层对账：集市 paid 单量合计应等于明细层 paid 订单数。
+  # 明细与集市在同一事务提交，对账不一致必须阻止发布
+  - type: custom_sql
+    name: recon_paid_orders
+    sql: SELECT 1 WHERE (SELECT coalesce(sum(order_cnt), 0) FROM dm.daily_city_sales)
+           <> (SELECT count(*) FROM dwh.fact_orders WHERE status = 'paid')
+    expect: empty
+    severity: error

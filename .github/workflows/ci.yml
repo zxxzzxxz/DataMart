@@ -16,8 +16,29 @@ jobs:
       - name: Ruff 代码检查
         run: |
           pip install ruff
-          ruff check dags plugins tests
-          ruff format --check dags plugins tests
+          ruff check src dags plugins designer/backend/app config tests scripts
+          ruff format --check src dags plugins designer/backend/app config tests scripts
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 校验前后端节点契约
+        run: |
+          pip install .
+          python scripts/export-node-catalog.py --check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: designer/frontend/package-lock.json
+      - run: npm ci
+        working-directory: designer/frontend
+      - run: npm run typecheck && npm run lint && npm test && npm run build
+        working-directory: designer/frontend
 
   compose-config:
     runs-on: ubuntu-latest
@@ -27,10 +48,34 @@ jobs:
         run: |
           docker compose -f docker-compose.yaml config -q
           AIRFLOW__CORE__FERNET_KEY=x AIRFLOW__API_AUTH__JWT_SECRET=x _AIRFLOW_WWW_USER_PASSWORD=x \
+            POSTGRES_REPLICATION_PASSWORD=x MINIO_ROOT_PASSWORD=x \
             docker compose -f docker-compose.yaml -f docker-compose.prod.yml config -q
+
+  designer-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 按独立 API 镜像依赖验收
+        run: |
+          pip install . pytest -r designer/backend/requirements.txt
+          python -m pytest tests/test_designer_auth.py tests/test_designer_runtime.py tests/test_review_regressions.py -q
 
   dag-test:
     runs-on: ubuntu-latest
+    services:
+      warehouse-test:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: acceptance-only
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,12 +84,48 @@ jobs:
       - name: 安装依赖（带 Airflow 官方 constraints 保证可复现）
         run: |
           pip install -r requirements.txt \
-            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.1/constraints-3.12.txt"
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt"
       - name: DAG 完整性与结构测试
-        run: python -m pytest tests -q
+        run: python -m pytest tests -q -o junit_family=xunit1 --junitxml=airflow-postgres-integration.xml
         env:
           # 测试只需解析 DAG，不需要真实元数据库
           AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////tmp/airflow-test.db
           AIRFLOW__CORE__LOAD_EXAMPLES: "false"
           # 让 plugins/ 下的共享模块（alerting/incremental）可被 DAG 导入
           AIRFLOW__CORE__PLUGINS_FOLDER: ${{ github.workspace }}/plugins
+          DATAMART_TEST_DSN: postgresql://postgres:acceptance-only@127.0.0.1:5432/postgres
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: airflow-postgres-integration
+          path: airflow-postgres-integration.xml
+
+  postgres-acceptance:
+    runs-on: ubuntu-latest
+    services:
+      warehouse-test:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: acceptance-only
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装事务引擎验收依赖
+        run: pip install . pytest psycopg2-binary 'psycopg[binary]>=3.1,<4'
+      - name: PostgreSQL 数据正确性、故障恢复、并发及容量验收
+        run: python -m pytest tests/test_warehouse_pipeline.py -q -o junit_family=xunit1 --junitxml=acceptance-postgres.xml
+        env:
+          DATAMART_TEST_DSN: postgresql://postgres:acceptance-only@127.0.0.1:5432/postgres
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-acceptance
+          path: acceptance-postgres.xml

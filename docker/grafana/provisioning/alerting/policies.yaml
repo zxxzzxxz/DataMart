@@ -1,9 +1,6 @@
 apiVersion: 1
-# 通知策略：所有告警路由到内置告警中心（alert-webhook）
+# 兜底通知策略：平台规则均在 Prometheus 侧（经 Alertmanager 分发）；
+# 此策略只服务于 Grafana UI 里手动新建的临时规则（直连告警中心）
 policies:
   - orgId: 1
     receiver: datamart-webhook
-    group_by: ["grafana_folder", "alertname"]
-    group_wait: 10s
-    group_interval: 1m
-    repeat_interval: 1h

@@ -4,5 +4,6 @@ datasources:
     uid: prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    # prometheus 容器启用了 --web.route-prefix=/prometheus/，API 全量迁移到前缀下
+    url: http://prometheus:9090/prometheus/
     isDefault: true

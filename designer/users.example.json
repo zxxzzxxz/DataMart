@@ -1,0 +1,20 @@
+{
+  "_comment": "设计器用户文件示例。复制为 designer/users.json 后使用（users.json 含密码哈希，不进 git）。示例密码：admin/admin123、editor/editor123、viewer/viewer123，请立即修改。密码格式 <salt_hex>$<pbkdf2_hex>，生成方法：scripts/designer-add-user.sh <username> <role> [password]，或 python -c \"import hashlib,os; s=os.urandom(16).hex(); print(s+'$'+hashlib.pbkdf2_hmac('sha256', '你的密码'.encode(), bytes.fromhex(s), 100000).hex())\"",
+  "users": [
+    {
+      "username": "admin",
+      "password": "27183f69faddd97b4444c98389660d81$88fc89be4acf9a1550cd50298b7b181c12f1a38ca0b861f7bb1263073c34efca",
+      "role": "admin"
+    },
+    {
+      "username": "editor",
+      "password": "904334a4f0c9ea9125ac7898311a658c$eef8d0d24f21c6a4bc2a32b2936f124f067ff527af8795e082202e92206d88ae",
+      "role": "editor"
+    },
+    {
+      "username": "viewer",
+      "password": "37f76d6e66bf4ed114f887ca5e357538$688e166342bb60e9c30944235a68e2964250ca0931ecff160b6ea95bf00aca18",
+      "role": "viewer"
+    }
+  ]
+}

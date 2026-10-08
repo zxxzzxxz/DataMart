@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Node } from '@xyflow/react';
-import type { NodeField, NodeType, ValidationError } from '../types';
-import type { DagMeta } from '../views/DesignerView';
+import type { DagMeta, NodeField, NodeType, ValidationError } from '../types';
+import SqlCheckButton from './SqlCheckButton';
 
 interface Props {
   dagId: string;
@@ -134,6 +134,12 @@ function NodeSection({ node, catalog, onRenameNode, onParamsChange, onDeleteNode
     onParamsChange(node.id, { ...(data.params ?? {}), [name]: value });
   };
 
+  // SQL 校验入口：sql / sql_check 节点且 sql 非空时展示
+  const sqlText = typeof data.params?.sql === 'string' ? data.params.sql : '';
+  const connRaw = data.params?.conn_id;
+  const connId = typeof connRaw === 'string' && connRaw.trim() !== '' ? connRaw : 'warehouse';
+  const showSqlCheck = (nodeType === 'sql' || nodeType === 'sql_check') && sqlText.trim() !== '';
+
   return (
     <div className="props-section">
       <div className="props-title">
@@ -176,6 +182,8 @@ function NodeSection({ node, catalog, onRenameNode, onParamsChange, onDeleteNode
         <div className="field-tip">未知节点类型「{nodeType}」，无法渲染参数表单</div>
       )}
 
+      {showSqlCheck && <SqlCheckButton sql={sqlText} connId={connId} />}
+
       <button className="btn delete-node-btn" onClick={() => onDeleteNode(node.id)}>
         删除节点
       </button>
@@ -195,7 +203,7 @@ function FieldInput({
 }) {
   switch (field.kind) {
     case 'textarea':
-      return <textarea rows={5} value={(value as string) ?? ''} onChange={e => onChange(e.target.value)} />;
+      return <textarea rows={5} value={typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value, null, 2)} onChange={e => onChange(e.target.value)} />;
     case 'select':
       return (
         <select value={(value as string) ?? ''} onChange={e => onChange(e.target.value)}>
