@@ -7,4 +7,4 @@ httpx==0.28.1
 # SQL 预检(EXPLAIN)PostgreSQL 驱动
 psycopg2-binary==2.9.13
 croniter==6.2.4
-filelock==3.32.6
+filelock==4.0.11
