@@ -51,7 +51,7 @@ jobs:
       # 注意：Code Scanning 对 public 仓库免费；private 仓库需要 GitHub Advanced Security
       # 许可，否则上传会 403。continue-on-error 兜底：上传失败不影响下面的门禁结果。
       - name: 上传 SARIF 到 Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
