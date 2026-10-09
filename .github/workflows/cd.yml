@@ -147,7 +147,7 @@ jobs:
     permissions:
       contents: write # 创建 Release 所需
     steps:
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           body: |
             ## 镜像清单（已推送至 ghcr.io，均另有 `:latest` 标签）
