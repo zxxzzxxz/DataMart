@@ -5,9 +5,13 @@ env（DESIGNER_USERS_FILE / DESIGNER_AUDIT_LOG / DESIGNER_TOKEN / DAGS_DIR / PLU
 经 monkeypatch 指向 tmp_path，后端在请求期读取这些 env，无需 reload 模块。
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -204,3 +208,51 @@ def test_audit_records_mutations(client):
     delete = next(e for e in entries if e["method"] == "DELETE")
     assert delete["path"] == "/api/dags/t_dag" and delete["status"] == 200
     assert delete["detail"] == {"dag_id": "t_dag"}
+
+
+# ---------- H2 认证 fail-open 修复回归 ----------
+
+
+def test_forged_token_with_public_default_secret_rejected(client, monkeypatch):
+    """未配置 DESIGNER_AUTH_SECRET/DESIGNER_TOKEN 时，用仓库公开值 designer-dev-token
+    作为 HMAC 密钥伪造的 admin token 必须被拒绝（历史行为可离线伪造）。"""
+    monkeypatch.delenv("DESIGNER_TOKEN", raising=False)
+    monkeypatch.delenv("DESIGNER_AUTH_SECRET", raising=False)
+    monkeypatch.setattr(auth, "_process_secret", None)
+    payload = (
+        base64.urlsafe_b64encode(
+            json.dumps(
+                {"u": "x", "role": "admin", "exp": int(time.time()) + 3600}, separators=(",", ":")
+            ).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    sig = hmac.new(b"designer-dev-token", payload.encode(), hashlib.sha256).hexdigest()
+    assert client.get("/api/dags", headers=_bearer(f"{payload}.{sig}")).status_code == 401
+    assert auth._secret() != "designer-dev-token"
+
+
+def test_empty_bearer_token_rejected(client, monkeypatch):
+    """空 Bearer token 不得通过 legacy 通道（compare_digest 非空短路回归）。"""
+    monkeypatch.delenv("DESIGNER_TOKEN", raising=False)
+    assert client.get("/api/dags", headers={"Authorization": "Bearer "}).status_code == 401
+
+
+def test_legacy_token_still_works_when_configured(client):
+    """显式配置 DESIGNER_TOKEN 时 legacy 通道保持可用（dev 兼容）。"""
+    assert client.get("/api/dags", headers=_bearer(LEGACY_TOKEN)).status_code == 200
+
+
+# ---------- H3 users.json 原子写回归 ----------
+
+
+def test_save_users_atomic_write_roundtrip(tmp_path, monkeypatch):
+    target = tmp_path / "users.json"
+    monkeypatch.setenv("DESIGNER_USERS_FILE", str(target))
+    auth.save_users([{"username": "u1", "password": "s$h", "role": "viewer"}])
+    assert auth.load_users() == [{"username": "u1", "password": "s$h", "role": "viewer"}]
+    # 原子写不产生残留临时文件；覆写同样安全（os.replace 语义）
+    assert not list(tmp_path.glob("*.tmp"))
+    auth.save_users([])
+    assert auth.load_users() == []

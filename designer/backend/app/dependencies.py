@@ -33,7 +33,9 @@ def resolve_authorization(authorization):
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization.removeprefix("Bearer ")
-    if compare_digest(token.encode(), auth.legacy_token().encode()):
+    legacy = auth.legacy_token()
+    # legacy 为空串（未配置 DESIGNER_TOKEN）时必须短路，否则空 token 会被 compare_digest("", "") 放行
+    if legacy and compare_digest(token.encode(), legacy.encode()):
         return AuthUser(username="token-admin", role="admin")
     return auth.verify_token(token)
 

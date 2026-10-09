@@ -18,7 +18,7 @@ USER root
 USER airflow
 COPY --chown=airflow:0 pyproject.toml /tmp/datamart/pyproject.toml
 COPY --chown=airflow:0 src /tmp/datamart/src
-RUN pip install --no-cache-dir /tmp/datamart "dag-factory==1.1.0" "apache-airflow-providers-http==6.1.0" "pytest"
+RUN pip install --no-cache-dir /tmp/datamart "dag-factory==1.1.0" "apache-airflow-providers-http==6.1.0" "boto3==1.43.109" "pytest"
 # 官方镜像把 airflow 本体与全部 provider 装在 /home/airflow/.local（airflow 用户的
 # user site）。容器以 root 启动时主进程被 entrypoint 降权到 airflow（不受影响），
 # 但 exec 进入容器运维时进程是 root，user site 解析到 /root/.local 会找不到包。

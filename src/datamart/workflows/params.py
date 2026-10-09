@@ -98,6 +98,43 @@ class SensorSqlParams(SqlParams):
         return "poke" if value == "normal" else value
 
 
+class _LoadParamsBase(TaskParams):
+    target_table: str
+    mode: Literal["append", "truncate", "upsert"] = "append"
+    upsert_key: str | None = None
+    conn_id: Literal["warehouse"] = "warehouse"
+
+    @model_validator(mode="after")
+    def upsert_requires_key(self):
+        if self.mode == "upsert" and not (self.upsert_key and self.upsert_key.strip()):
+            raise ValueError("mode=upsert 时必须提供 upsert_key")
+        return self
+
+
+class ApiLoadParams(_LoadParamsBase):
+    url: str
+    method: Literal["GET", "POST"] = "GET"
+    headers: dict[str, str] | None = None
+    data_path: str | None = None
+
+    @field_validator("headers", mode="before")
+    @classmethod
+    def parse_headers(cls, value):
+        if isinstance(value, str):
+            try:
+                return json.loads(value) if value.strip() else None
+            except ValueError as exc:
+                raise ValueError("headers 必须是 JSON 对象") from exc
+        return value
+
+
+class FileLoadParams(_LoadParamsBase):
+    source: str
+    format: Literal["csv", "json", "jsonl"] = "csv"
+    delimiter: str = ","
+    header: bool = True
+
+
 PARAM_MODELS = {
     "sql": SqlParams,
     "sql_check": SqlCheckParams,
@@ -106,4 +143,6 @@ PARAM_MODELS = {
     "http": HttpParams,
     "sensor_sql": SensorSqlParams,
     "empty": TaskParams,
+    "api_load": ApiLoadParams,
+    "file_load": FileLoadParams,
 }

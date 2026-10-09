@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml
 from filelock import FileLock
 
 from datamart.workflows import convert
@@ -91,7 +92,7 @@ class DagStore:
                 document = self.load_document(path.stem)
             except FileNotFoundError:
                 continue
-            except ValueError:
+            except (ValueError, yaml.YAMLError):
                 log.warning("跳过损坏的设计器 YAML：%s", path, exc_info=True)
                 continue
             documents.append(

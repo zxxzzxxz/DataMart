@@ -82,7 +82,7 @@ compose 新增一个服务 `dag-designer`（后端 uvicorn + 前端构建产物�
 - 端口 `8081`
 - 与 Airflow 通过内部网络通信（调 `http://airflow-apiserver:8080/api/v2`）
 
-## 4. 节点类型目录（当前 7 种，可扩展）
+## 4. 节点类型目录（当前 9 种，可扩展）
 
 | 节点类型 | 底层实现 | 关键参数 |
 |---|---|---|
@@ -93,12 +93,14 @@ compose 新增一个服务 `dag-designer`（后端 uvicorn + 前端构建产物�
 | HTTP | HttpOperator | endpoint（建议绝对 URL）、method、data、headers |
 | SQL 传感器 | SQLSensor（common.sql provider） | sql、poke_interval、timeout、mode |
 | 占位 | EmptyOperator | 无（汇聚/分组占位） |
+| 接口入库 | PythonOperator（`plugins/ingestion.py:api_load`） | url、method、headers、data_path（记录数组 JSON 路径）、target_table、mode（append/truncate/upsert）、upsert_key；4xx/5xx 判失败，JSON 键自动匹配表列 |
+| 文件入库 | PythonOperator（`plugins/ingestion.py:file_load`） | source（本地路径或 s3://桶/键，默认栈内 MinIO）、format（csv/json/jsonl）、target_table、mode、upsert_key、delimiter、header；CSV 走 COPY 高速通道，upsert 经临时表 merge |
 
 所有节点类型共享两个可选高级字段：`trigger_rule`（all_success/all_done/all_failed/none_failed/one_success/one_failed/none_skipped）与任务级 `retries`（留空继承 DAG 级）。
 
-尚未实现（路线图）：增量同步节点（复用 `plugins/incremental.py` 水位线框架）、Python 函数节点（预注册函数库下拉选择）。
+尚未实现（路线图）：增量同步节点（复用水位线框架）、Python 函数节点（预注册函数库下拉选择）。
 
-新增节点类型 = 在 `plugins/dag_designer/catalog.py` 注册一条 + 底层 operator 实现，前端零改动（表单由 schema 驱动）。
+新增节点类型 = 在 `src/datamart/workflows/catalog.py` 注册一条 + 底层 operator 实现，前端零改动（表单由 schema 驱动，节点目录契约由 `scripts/export-node-catalog.py` 生成并在 CI 校验同步）。
 
 ## 5. YAML 存储格式示例
 

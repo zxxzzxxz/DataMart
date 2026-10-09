@@ -194,6 +194,156 @@ NODE_TYPES: list[dict[str, Any]] = [
         "operator": "airflow.providers.standard.operators.empty.EmptyOperator",
         "fields": [],
     },
+    {
+        "type": "api_load",
+        "label": "接口入库",
+        "operator": "airflow.providers.standard.operators.python.PythonOperator",
+        "fields": [
+            {
+                "name": "url",
+                "label": "请求地址",
+                "kind": "text",
+                "required": True,
+                "default": None,
+                "options": None,
+                "help": "绝对 URL，返回 JSON；4xx/5xx 判定为任务失败",
+            },
+            {
+                "name": "method",
+                "label": "请求方法",
+                "kind": "select",
+                "required": False,
+                "default": "GET",
+                "options": ["GET", "POST"],
+            },
+            {
+                "name": "headers",
+                "label": "请求头",
+                "kind": "textarea",
+                "required": False,
+                "default": None,
+                "options": None,
+                "help": '可选，JSON 字符串，如 {"Authorization":"Bearer x"}',
+            },
+            {
+                "name": "data_path",
+                "label": "记录路径",
+                "kind": "text",
+                "required": False,
+                "default": None,
+                "options": None,
+                "help": "记录数组的 JSON 路径，如 data.items；留空=根为数组或单对象",
+            },
+            {
+                "name": "target_table",
+                "label": "目标表",
+                "kind": "text",
+                "required": True,
+                "default": None,
+                "options": None,
+                "help": "如 dwh.my_table；JSON 键自动与表列名匹配",
+            },
+            {
+                "name": "mode",
+                "label": "写入模式",
+                "kind": "select",
+                "required": False,
+                "default": "append",
+                "options": ["append", "truncate", "upsert"],
+            },
+            {
+                "name": "upsert_key",
+                "label": "upsert 键",
+                "kind": "text",
+                "required": False,
+                "default": None,
+                "options": None,
+                "help": "mode=upsert 时必填，冲突判断列",
+            },
+            {
+                "name": "conn_id",
+                "label": "数据库连接",
+                "kind": "select",
+                "required": False,
+                "default": "warehouse",
+                "options": ["warehouse"],
+            },
+        ],
+    },
+    {
+        "type": "file_load",
+        "label": "文件入库",
+        "operator": "airflow.providers.standard.operators.python.PythonOperator",
+        "fields": [
+            {
+                "name": "source",
+                "label": "文件来源",
+                "kind": "text",
+                "required": True,
+                "default": None,
+                "options": None,
+                "help": "本地路径（须位于挂载卷内）或 s3://桶/键（默认走栈内 MinIO）",
+            },
+            {
+                "name": "format",
+                "label": "文件格式",
+                "kind": "select",
+                "required": False,
+                "default": "csv",
+                "options": ["csv", "json", "jsonl"],
+            },
+            {
+                "name": "target_table",
+                "label": "目标表",
+                "kind": "text",
+                "required": True,
+                "default": None,
+                "options": None,
+                "help": "如 dwh.my_table；CSV 需表头列名与表列一致",
+            },
+            {
+                "name": "mode",
+                "label": "写入模式",
+                "kind": "select",
+                "required": False,
+                "default": "append",
+                "options": ["append", "truncate", "upsert"],
+            },
+            {
+                "name": "upsert_key",
+                "label": "upsert 键",
+                "kind": "text",
+                "required": False,
+                "default": None,
+                "options": None,
+                "help": "mode=upsert 时必填，冲突判断列",
+            },
+            {
+                "name": "delimiter",
+                "label": "分隔符",
+                "kind": "text",
+                "required": False,
+                "default": ",",
+                "options": None,
+            },
+            {
+                "name": "header",
+                "label": "含表头",
+                "kind": "checkbox",
+                "required": False,
+                "default": True,
+                "options": None,
+            },
+            {
+                "name": "conn_id",
+                "label": "数据库连接",
+                "kind": "select",
+                "required": False,
+                "default": "warehouse",
+                "options": ["warehouse"],
+            },
+        ],
+    },
 ]
 
 # 所有节点类型共享的可选高级字段（追加在每种类型的 fields 末尾）
@@ -236,6 +386,14 @@ _TYPE_INDEX: dict[str, dict[str, Any]] = {spec["type"]: spec for spec in NODE_TY
 NOTIFY_CALLABLE = "alerting._post_webhook"
 # 任务失败告警回调（plugins/alerting.py），写入 default_args.on_failure_callback
 FAILURE_CALLBACK = "alerting.send_failure_alert"
+
+# Python 函数节点类型 → 固定 python_callable（字符串路径，运行期由 dag-factory import_string 解析；
+# 业务参数进 op_kwargs，trigger_rule/retries 留在任务级 kwargs）
+PYTHON_CALLABLES: dict[str, str] = {
+    "notify": NOTIFY_CALLABLE,
+    "api_load": "ingestion.api_load",
+    "file_load": "ingestion.file_load",
+}
 
 
 def list_node_types() -> list[dict[str, Any]]:

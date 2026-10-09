@@ -560,10 +560,22 @@ services:
     deploy: *res-xs
     restart: always
 
-  # ---------- 告警 Webhook 接收器(告警落盘到 alert-data 卷) ----------
+  # ---------- 告警 Webhook 接收器(告警落盘到 alert-data 卷;可按 env 转发企微/邮件) ----------
   alert-webhook:
     image: python:3.12-alpine
     command: python /app/receiver.py
+    environment:
+      # 通知转发（缺省关闭）：企业微信群机器人 webhook URL；级别默认 critical
+      ALERT_FORWARD_WECOM: ${ALERT_FORWARD_WECOM:-}
+      ALERT_FORWARD_SEVERITIES: ${ALERT_FORWARD_SEVERITIES:-critical}
+      # 邮件通知（host 与 to 同时配置才生效）
+      ALERT_SMTP_HOST: ${ALERT_SMTP_HOST:-}
+      ALERT_SMTP_PORT: ${ALERT_SMTP_PORT:-465}
+      ALERT_SMTP_USER: ${ALERT_SMTP_USER:-}
+      ALERT_SMTP_PASS: ${ALERT_SMTP_PASS:-}
+      ALERT_SMTP_FROM: ${ALERT_SMTP_FROM:-}
+      ALERT_SMTP_TO: ${ALERT_SMTP_TO:-}
+      ALERT_SMTP_TLS: ${ALERT_SMTP_TLS:-true}
     volumes:
       - ./docker/alert-webhook/receiver.py:/app/receiver.py:ro
       - alert-data:/data
@@ -684,6 +696,18 @@ services:
       DATA_SOURCE_NAME: postgresql://airflow:${POSTGRES_PASSWORD:-airflow}@postgres:5432/airflow?sslmode=disable
     depends_on:
       postgres:
+        condition: service_healthy
+    networks: [datamart]
+    deploy: *res-xs
+    restart: always
+
+  # ---------- PostgreSQL Exporter(数仓指标,含流复制;warehouse 备库掉线不再静默) ----------
+  warehouse-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://warehouse:${WAREHOUSE_PASSWORD:-warehouse}@warehouse:5432/warehouse?sslmode=disable
+    depends_on:
+      warehouse:
         condition: service_healthy
     networks: [datamart]
     deploy: *res-xs

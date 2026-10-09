@@ -85,3 +85,56 @@ def test_actual_airflow_postgres_hook_runs_transaction_engine(database):
     assert engine.audit()["revision"] == 2
     assert engine.acknowledge_events(["sdk-hook-full"]) == 1
     assert engine.pending_events() == [{"batch_id": "sdk-hook-incremental", "revision": 2}]
+
+
+# ---------- 空增量不发布：publish_batch 守卫回归 ----------
+
+
+def _empty_increment_result(**overrides):
+    result = {
+        "mode": "incremental",
+        "full_reconcile": False,
+        "source_changes": 0,
+        "batch_id": "b-empty",
+        "revision": 9,
+    }
+    result.update(overrides)
+    return result
+
+
+def test_empty_incremental_skips_publication(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_tasks,
+        "get_current_context",
+        lambda: {"ti": SimpleNamespace(xcom_pull=lambda task_ids: _empty_increment_result())},
+    )
+    with pytest.raises(AirflowSkipException):
+        pipeline_tasks.publish_batch()
+
+
+def test_nonempty_incremental_still_publishes(monkeypatch):
+    events = OutletEventAccessors()
+    monkeypatch.setattr(
+        pipeline_tasks,
+        "get_current_context",
+        lambda: {
+            "ti": SimpleNamespace(
+                xcom_pull=lambda task_ids: _empty_increment_result(source_changes=2, batch_id="b-nonempty")
+            ),
+            "outlet_events": events,
+        },
+    )
+    assert pipeline_tasks.publish_batch() == ["b-nonempty"]
+
+
+def test_full_reconcile_still_publishes_even_when_empty(monkeypatch):
+    events = OutletEventAccessors()
+    monkeypatch.setattr(
+        pipeline_tasks,
+        "get_current_context",
+        lambda: {
+            "ti": SimpleNamespace(xcom_pull=lambda task_ids: _empty_increment_result(full_reconcile=True)),
+            "outlet_events": events,
+        },
+    )
+    assert pipeline_tasks.publish_batch() == ["b-empty"]

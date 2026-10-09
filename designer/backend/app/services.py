@@ -124,11 +124,16 @@ class SqlCheckService:
         statement = statement.strip().rstrip(";").strip()
         if not statement:
             raise ValueError("SQL 不能为空")
+        # psycopg2 无参 execute 走简单查询协议：语句内分号会变成堆叠语句被全部执行
+        if ";" in statement:
+            raise ValueError("仅允许单条语句（检测到语句内分号）")
         try:
             connection = self.connect(self.dsn)
         except psycopg2.Error as exc:
             return {"ok": False, "error": str(exc)[:500]}
         try:
+            # 会话级只读：DML/DDL 一律被数据库拒绝，EXPLAIN 不产生任何写副作用
+            connection.set_session(readonly=True)
             started = time.perf_counter()
             with connection.cursor() as cursor:
                 cursor.execute("SET statement_timeout = '10s'")

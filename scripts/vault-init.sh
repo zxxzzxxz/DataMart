@@ -37,8 +37,17 @@ vt secrets enable -path=secret kv-v2 2>/dev/null || echo "   （secret/ 已存�
 echo ">> 写入种子密钥..."
 # Airflow VaultBackend 约定：connections 读 secret/connections/<conn_id> 的 conn_uri 键；
 # variables 读 secret/variables/<var_key> 的 value 键（见 docker-compose.yaml 中 BACKEND_KWARGS）
+# warehouse 口令：优先环境变量，其次 .env（已随机化口令的部署不再写入公开默认值）
+WAREHOUSE_PWD="${WAREHOUSE_PASSWORD:-}"
+if [[ -z "$WAREHOUSE_PWD" && -f .env ]]; then
+  WAREHOUSE_PWD="$(grep '^WAREHOUSE_PASSWORD=' .env | tail -1 | cut -d= -f2-)"
+fi
+if [[ -z "$WAREHOUSE_PWD" ]]; then
+  WAREHOUSE_PWD=warehouse
+  echo "!! 警告：未找到 WAREHOUSE_PASSWORD（环境变量或 .env），写入开发默认口令 warehouse——仅适用于未改密的开发环境"
+fi
 vt kv put secret/connections/warehouse \
-  conn_uri="postgresql://warehouse:warehouse@warehouse:5432/warehouse" >/dev/null
+  conn_uri="postgresql://warehouse:${WAREHOUSE_PWD}@warehouse:5432/warehouse" >/dev/null
 vt kv put secret/variables/datamart_alert_webhook \
   value="${DATAMART_ALERT_WEBHOOK:-http://alert-webhook:9099/alert}" >/dev/null
 

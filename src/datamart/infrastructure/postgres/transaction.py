@@ -53,10 +53,19 @@ class TransactionQueryHook:
 class PostgresUnitOfWork:
     """Own a fresh connection, optional session lock, and one repeatable-read commit."""
 
-    def __init__(self, connect, *, lock_key=None, lock_timeout_ms=30_000, read_only=False):
+    def __init__(
+        self,
+        connect,
+        *,
+        lock_key=None,
+        lock_timeout_ms=30_000,
+        statement_timeout_ms=600_000,
+        read_only=False,
+    ):
         self.connect = connect
         self.lock_key = lock_key
         self.lock_timeout_ms = lock_timeout_ms
+        self.statement_timeout_ms = statement_timeout_ms
         self.read_only = read_only
 
     def __enter__(self):
@@ -65,7 +74,10 @@ class PostgresUnitOfWork:
             self.connection.autocommit = True
             with self.connection.cursor() as cursor:
                 cursor.execute("SELECT set_config('lock_timeout', %s, false)", (f"{self.lock_timeout_ms}ms",))
-                cursor.execute("SELECT set_config('statement_timeout', '10min', false)")
+                cursor.execute(
+                    "SELECT set_config('statement_timeout', %s, false)",
+                    (f"{self.statement_timeout_ms}ms",),
+                )
                 if self.lock_key is not None:
                     cursor.execute("SELECT pg_advisory_lock(%s)", (self.lock_key,))
             self.transaction = transaction_cursor(self.connection, read_only=self.read_only)

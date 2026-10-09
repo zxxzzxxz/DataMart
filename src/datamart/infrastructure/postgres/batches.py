@@ -19,11 +19,19 @@ class PostgresBatchRepository:
         )
         return self.cursor.fetchone()
 
-    def commit_record(self, batch_id, mode, arguments, result):
+    def commit_record(self, batch_id, mode, arguments, result, publish_pending=True):
+        # publish_pending=False（如空增量）：提交时即标记事件已送达，outbox 不会拾取该批次
         self.cursor.execute(
-            "INSERT INTO dwh.etl_batches (batch_id, mode, arguments, revision, result) "
-            "VALUES (%s, %s, %s::jsonb, %s, %s::jsonb)",
-            (batch_id, mode, json.dumps(arguments), result["revision"], json.dumps(result)),
+            "INSERT INTO dwh.etl_batches (batch_id, mode, arguments, revision, result, event_delivered_at) "
+            "VALUES (%s, %s, %s::jsonb, %s, %s::jsonb, CASE WHEN %s THEN NULL ELSE now() END)",
+            (
+                batch_id,
+                mode,
+                json.dumps(arguments),
+                result["revision"],
+                json.dumps(result),
+                publish_pending,
+            ),
         )
         self.cursor.execute(
             "UPDATE dwh.etl_pipeline_state SET bootstrapped = true, revision = %s WHERE pipeline = 'sales'",

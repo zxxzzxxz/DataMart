@@ -757,5 +757,432 @@
       "title": "TaskParams",
       "type": "object"
     }
+  },
+  {
+    "type": "api_load",
+    "label": "接口入库",
+    "operator": "airflow.providers.standard.operators.python.PythonOperator",
+    "fields": [
+      {
+        "name": "url",
+        "label": "请求地址",
+        "kind": "text",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "绝对 URL，返回 JSON；4xx/5xx 判定为任务失败"
+      },
+      {
+        "name": "method",
+        "label": "请求方法",
+        "kind": "select",
+        "required": false,
+        "default": "GET",
+        "options": [
+          "GET",
+          "POST"
+        ]
+      },
+      {
+        "name": "headers",
+        "label": "请求头",
+        "kind": "textarea",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "可选，JSON 字符串，如 {\"Authorization\":\"Bearer x\"}"
+      },
+      {
+        "name": "data_path",
+        "label": "记录路径",
+        "kind": "text",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "记录数组的 JSON 路径，如 data.items；留空=根为数组或单对象"
+      },
+      {
+        "name": "target_table",
+        "label": "目标表",
+        "kind": "text",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "如 dwh.my_table；JSON 键自动与表列名匹配"
+      },
+      {
+        "name": "mode",
+        "label": "写入模式",
+        "kind": "select",
+        "required": false,
+        "default": "append",
+        "options": [
+          "append",
+          "truncate",
+          "upsert"
+        ]
+      },
+      {
+        "name": "upsert_key",
+        "label": "upsert 键",
+        "kind": "text",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "mode=upsert 时必填，冲突判断列"
+      },
+      {
+        "name": "conn_id",
+        "label": "数据库连接",
+        "kind": "select",
+        "required": false,
+        "default": "warehouse",
+        "options": [
+          "warehouse"
+        ]
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "target_table": {
+          "title": "Target Table",
+          "type": "string"
+        },
+        "mode": {
+          "default": "append",
+          "enum": [
+            "append",
+            "truncate",
+            "upsert"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "upsert_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upsert Key"
+        },
+        "conn_id": {
+          "const": "warehouse",
+          "default": "warehouse",
+          "title": "Conn Id",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "method": {
+          "default": "GET",
+          "enum": [
+            "GET",
+            "POST"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "headers": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Headers"
+        },
+        "data_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Path"
+        }
+      },
+      "required": [
+        "target_table",
+        "url"
+      ],
+      "title": "ApiLoadParams",
+      "type": "object"
+    }
+  },
+  {
+    "type": "file_load",
+    "label": "文件入库",
+    "operator": "airflow.providers.standard.operators.python.PythonOperator",
+    "fields": [
+      {
+        "name": "source",
+        "label": "文件来源",
+        "kind": "text",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "本地路径（须位于挂载卷内）或 s3://桶/键（默认走栈内 MinIO）"
+      },
+      {
+        "name": "format",
+        "label": "文件格式",
+        "kind": "select",
+        "required": false,
+        "default": "csv",
+        "options": [
+          "csv",
+          "json",
+          "jsonl"
+        ]
+      },
+      {
+        "name": "target_table",
+        "label": "目标表",
+        "kind": "text",
+        "required": true,
+        "default": null,
+        "options": null,
+        "help": "如 dwh.my_table；CSV 需表头列名与表列一致"
+      },
+      {
+        "name": "mode",
+        "label": "写入模式",
+        "kind": "select",
+        "required": false,
+        "default": "append",
+        "options": [
+          "append",
+          "truncate",
+          "upsert"
+        ]
+      },
+      {
+        "name": "upsert_key",
+        "label": "upsert 键",
+        "kind": "text",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "mode=upsert 时必填，冲突判断列"
+      },
+      {
+        "name": "delimiter",
+        "label": "分隔符",
+        "kind": "text",
+        "required": false,
+        "default": ",",
+        "options": null
+      },
+      {
+        "name": "header",
+        "label": "含表头",
+        "kind": "checkbox",
+        "required": false,
+        "default": true,
+        "options": null
+      },
+      {
+        "name": "conn_id",
+        "label": "数据库连接",
+        "kind": "select",
+        "required": false,
+        "default": "warehouse",
+        "options": [
+          "warehouse"
+        ]
+      },
+      {
+        "name": "trigger_rule",
+        "label": "触发规则",
+        "kind": "select",
+        "required": false,
+        "default": "all_success",
+        "options": [
+          "all_success",
+          "all_done",
+          "all_failed",
+          "none_failed",
+          "one_success",
+          "one_failed",
+          "none_skipped"
+        ],
+        "help": "上游任务处于何种状态时本任务可触发"
+      },
+      {
+        "name": "retries",
+        "label": "重试次数",
+        "kind": "number",
+        "required": false,
+        "default": null,
+        "options": null,
+        "help": "0-10；留空则继承 DAG 级设置"
+      }
+    ],
+    "parameter_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "trigger_rule": {
+          "default": "all_success",
+          "enum": [
+            "all_success",
+            "all_done",
+            "all_failed",
+            "none_failed",
+            "one_success",
+            "one_failed",
+            "none_skipped"
+          ],
+          "title": "Trigger Rule",
+          "type": "string"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        },
+        "target_table": {
+          "title": "Target Table",
+          "type": "string"
+        },
+        "mode": {
+          "default": "append",
+          "enum": [
+            "append",
+            "truncate",
+            "upsert"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "upsert_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Upsert Key"
+        },
+        "conn_id": {
+          "const": "warehouse",
+          "default": "warehouse",
+          "title": "Conn Id",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "format": {
+          "default": "csv",
+          "enum": [
+            "csv",
+            "json",
+            "jsonl"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "delimiter": {
+          "default": ",",
+          "title": "Delimiter",
+          "type": "string"
+        },
+        "header": {
+          "default": true,
+          "title": "Header",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target_table",
+        "source"
+      ],
+      "title": "FileLoadParams",
+      "type": "object"
+    }
   }
 ]

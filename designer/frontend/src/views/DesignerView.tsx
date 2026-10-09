@@ -19,7 +19,7 @@ function CanvasInner({ dagId, tokenVersion, onBack }: Props) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const { catalog, meta, nodes, edges, selectedId, setSelectedId, dirty, errors, notice,
     loading, loadError, saving, validating, setNotice, updateMeta, handleNodesChange, handleEdgesChange,
-    onConnect, addNode, renameNode, updateNodeParams, deleteNode, onValidate, onSave, reload } = useDagEditor(dagId, tokenVersion);
+    onConnect, addNode, renameNode, updateNodeParams, deleteNode, onValidate, onSave, reload, reloadCurrent } = useDagEditor(dagId, tokenVersion);
   const { runInfo, polling, runUnavailable, refreshRunStatus } = useDagRunStatus(dagId, tokenVersion);
   const [showTrigger, setShowTrigger] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -33,6 +33,8 @@ function CanvasInner({ dagId, tokenVersion, onBack }: Props) {
     addNode(event.dataTransfer.getData(DND_MIME), screenToFlowPosition({ x: event.clientX, y: event.clientY }));
   };
   const handleBack = () => { if (!dirty || window.confirm('有未保存的改动，确定返回列表吗？')) onBack(); };
+  // 乐观锁冲突后的恢复：丢弃本地改动，从服务端重新加载（dirty 时先确认）
+  const handleReload = () => { if (!dirty || window.confirm('重新加载将丢弃未保存的改动，确定吗？')) reloadCurrent(); };
   const handleTriggered = (runId: string) => { setShowTrigger(false); setNotice(`已触发，run_id=${runId}`); void refreshRunStatus(); };
   const handleRolledBack = (versionId: string) => { setShowHistory(false); reload(versionId); void refreshRunStatus(); };
   // ---------- 渲染 ----------
@@ -91,6 +93,9 @@ function CanvasInner({ dagId, tokenVersion, onBack }: Props) {
           </button>
           <button className="btn" onClick={() => setShowHistory(true)}>
             历史
+          </button>
+          <button className="btn" onClick={handleReload} title="丢弃未保存改动，从服务端重新加载">
+            重新加载
           </button>
           <button className="btn" onClick={onValidate} disabled={validating}>
             {validating ? '校验中…' : '校验'}

@@ -101,10 +101,11 @@ scrape_configs:
     static_configs:
       - targets: ["minio:9000"]
 
-  # Postgres 数据库指标（经 postgres-exporter，含流复制延迟 pg_stat_replication_*）
+  # Postgres 数据库指标（元库 postgres 与数仓 warehouse 双实例；instance 标签区分，
+  # 复制规则对两库分别评估，warehouse 备库掉线不再静默）
   - job_name: postgres
     static_configs:
-      - targets: ["postgres-exporter:9187"]
+      - targets: ["postgres-exporter:9187", "warehouse-exporter:9187"]
 
   # Redis 指标（经 redis-exporter，Celery broker 存活与队列长度）
   - job_name: redis

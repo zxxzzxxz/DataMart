@@ -1,0 +1,81 @@
+ingest_demo:
+  default_args:
+    owner: designer
+    retries: 2
+    retry_delay: 300
+    on_failure_callback: alerting.send_failure_alert
+  schedule: null
+  description: 数据接入演示：S3 文件 + 本地文件 + HTTP API 三路入库
+  designer:
+    nodes:
+      load_s3:
+        type: file_load
+        position:
+          x: 60.0
+          y: 80.0
+      load_local:
+        type: file_load
+        position:
+          x: 300.0
+          y: 80.0
+      load_api:
+        type: api_load
+        position:
+          x: 540.0
+          y: 80.0
+      done:
+        type: notify
+        position:
+          x: 780.0
+          y: 80.0
+  tasks:
+    load_s3:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: ingestion.file_load
+      op_kwargs:
+        format: csv
+        mode: upsert
+        delimiter: ','
+        header: true
+        conn_id: warehouse
+        target_table: public.ingest_csv_s3
+        upsert_key: order_id
+        source: s3://datamart-ingest/orders.csv
+      trigger_rule: all_success
+    load_local:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: ingestion.file_load
+      op_kwargs:
+        format: csv
+        mode: upsert
+        delimiter: ','
+        header: true
+        conn_id: warehouse
+        target_table: public.ingest_csv_local
+        upsert_key: order_id
+        source: /opt/airflow/logs/ingest-demo/orders.csv
+      trigger_rule: all_success
+      dependencies:
+      - load_s3
+    load_api:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: ingestion.api_load
+      op_kwargs:
+        method: GET
+        mode: upsert
+        conn_id: warehouse
+        target_table: public.ingest_api_demo
+        upsert_key: order_id
+        url: http://host.docker.internal:8899/api/items.json
+        data_path: data.items
+      trigger_rule: all_success
+      dependencies:
+      - load_local
+    done:
+      operator: airflow.providers.standard.operators.python.PythonOperator
+      python_callable: alerting._post_webhook
+      op_kwargs:
+        message: 数据接入演示完成
+      trigger_rule: all_success
+      dependencies:
+      - load_api

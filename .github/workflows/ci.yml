@@ -49,6 +49,8 @@ jobs:
           docker compose -f docker-compose.yaml config -q
           AIRFLOW__CORE__FERNET_KEY=x AIRFLOW__API_AUTH__JWT_SECRET=x _AIRFLOW_WWW_USER_PASSWORD=x \
             POSTGRES_REPLICATION_PASSWORD=x MINIO_ROOT_PASSWORD=x \
+            POSTGRES_PASSWORD=x WAREHOUSE_PASSWORD=x GRAFANA_ADMIN_PASSWORD=x \
+            KEYCLOAK_ADMIN_PASSWORD=x DESIGNER_TOKEN=x DESIGNER_AUTH_SECRET=x AIRFLOW_ADMIN_PASSWORD=x \
             docker compose -f docker-compose.yaml -f docker-compose.prod.yml config -q
 
   designer-backend:

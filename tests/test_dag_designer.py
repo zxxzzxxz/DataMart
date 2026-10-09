@@ -123,7 +123,17 @@ def test_unknown_node_type():
 
 def test_catalog_all_types_complete():
     types = {spec["type"] for spec in catalog.list_node_types()}
-    assert types == {"sql", "sql_check", "notify", "bash", "http", "sensor_sql", "empty"}
+    assert types == {
+        "sql",
+        "sql_check",
+        "notify",
+        "bash",
+        "http",
+        "sensor_sql",
+        "empty",
+        "api_load",
+        "file_load",
+    }
     for spec in catalog.list_node_types():
         assert spec["label"]
         assert spec["operator"].startswith("airflow.")

@@ -66,7 +66,8 @@ class AirflowClient:
             resp = self._http.post("/auth/token", json={"username": self.username, "password": self.password})
         except httpx.HTTPError as exc:
             raise AirflowUnavailable(f"认证请求失败：{exc}") from exc
-        if resp.status_code != 200:
+        # Airflow 3 FAB 创建令牌返回 201 Created（不是 200），任何 2xx 都视为成功
+        if resp.status_code >= 400:
             raise AirflowUnavailable(f"认证失败：HTTP {resp.status_code}")
         try:
             token = resp.json().get("access_token")
@@ -127,7 +128,10 @@ class AirflowClient:
 
     def trigger(self, dag_id: str, conf: dict[str, Any] | None = None) -> dict[str, Any]:
         _check_id("dag_id", dag_id)
-        data = self._request("POST", f"/api/v2/dags/{dag_id}/dagRuns", json={"conf": conf or {}})
+        # Airflow 3.3 的 dagRuns 要求显式携带 logical_date 字段（可为 null，实测 3.3.2）
+        data = self._request(
+            "POST", f"/api/v2/dags/{dag_id}/dagRuns", json={"logical_date": None, "conf": conf or {}}
+        )
         if not isinstance(data, dict):
             raise AirflowUnavailable("触发响应不是 JSON 对象")
         return data

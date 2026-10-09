@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 import psycopg2
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -77,6 +78,7 @@ def create_app(settings=None, *, airflow=None, sql_connect=psycopg2.connect):
         (AirflowUnavailable, 503),
         (Timeout, 503),
         (ValueError, 400),
+        (yaml.YAMLError, 400),
         (LoginFailed, 401),
     ]:
         application.add_exception_handler(exception, handler(status))

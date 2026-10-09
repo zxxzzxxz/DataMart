@@ -39,9 +39,10 @@ groups:
   # Postgres 流复制健康
   - name: datamart-postgres-replication
     rules:
-      # 主库上看不到任何流复制连接：备库掉线或未启动（单库无备部署下会持续触发，属预期提醒）
+      # 任一主库（元库 postgres-exporter 或数仓 warehouse-exporter）看不到流复制连接：
+      # 对应备库掉线或未启动（单库无备部署下会持续触发，属预期提醒）
       - alert: PostgresReplicationMissing
-        expr: absent(pg_stat_replication_pg_wal_lsn_diff)
+        expr: absent(pg_stat_replication_pg_wal_lsn_diff{instance="postgres-exporter:9187"}) or absent(pg_stat_replication_pg_wal_lsn_diff{instance="warehouse-exporter:9187"})
         for: 5m
         labels:
           severity: critical
@@ -85,9 +86,12 @@ groups:
   # 备份与恢复演练（指标由备份/演练脚本推送到 Pushgateway）
   - name: datamart-backup
     rules:
-      # 超过 26 小时（93600 秒）没有成功备份：备份脚本可能中断
+      # 超过 26 小时（93600 秒）没有成功备份：备份脚本可能中断；
+      # or absent 兜底"从未成功过"（序列不存在时 time()-<不存在> 为空，永不触发）——恰是最需要告警的场景
       - alert: BackupStale
-        expr: time() - datamart_backup_last_success_timestamp_seconds > 93600
+        expr: time() - datamart_backup_last_success_timestamp_seconds > 93600 or absent(datamart_backup_last_success_timestamp_seconds)
+        # for 10m 吸收全新部署到首次备份推送之间的空窗，避免装机初期误报
+        for: 10m
         labels:
           severity: warning
           service: backup

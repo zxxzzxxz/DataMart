@@ -15,9 +15,12 @@ DAILY_SALES_ASSET = Asset(uri=ASSET_URI)
 
 
 def pipeline():
+    # 写者串行等待与单语句超时的容量参数：默认 30min（须大于 P99 批次时长），可按容量调优
     return WarehousePipeline(
         PostgresHook(postgres_conn_id="warehouse").get_conn,
         os.environ.get("DATAMART_DQ_CONFIG_DIR", DEFAULT_CONFIG_DIR),
+        lock_timeout_ms=int(os.environ.get("DATAMART_LOCK_TIMEOUT_MS", 30 * 60 * 1000)),
+        statement_timeout_ms=int(os.environ.get("DATAMART_STATEMENT_TIMEOUT_MS", 30 * 60 * 1000)),
     )
 
 
@@ -39,6 +42,10 @@ def apply_batch(mode: str):
 
 def publish_batch():
     result = get_current_context()["ti"].xcom_pull(task_ids="apply_batch")
+    # 空增量（无源变更且未触发全量对账）不发布：提交时事件已确认为送达，acknowledge 随 skip，
+    # 下游审计 DAG 不再每 15 分钟空转
+    if result["mode"] == "incremental" and not result["full_reconcile"] and result["source_changes"] == 0:
+        raise AirflowSkipException("No source changes in this incremental batch")
     return _emit([result])
 
 

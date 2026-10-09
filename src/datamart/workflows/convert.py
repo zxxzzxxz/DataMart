@@ -61,10 +61,12 @@ def to_yaml_dict(dag: DesignerDag) -> dict[str, Any]:
         # 合并 catalog 默认值，保证 YAML 中的参数是完整的（operator 运行时不缺省）
         params = {**catalog.field_defaults(node.type), **node.params}
         task: dict[str, Any] = {"operator": spec["operator"]}
-        if node.type == "notify":
-            task["python_callable"] = catalog.NOTIFY_CALLABLE
-            task["op_kwargs"] = {"message": params["message"]}
-            task.update({key: value for key, value in params.items() if key != "message"})
+        if node.type in catalog.PYTHON_CALLABLES:
+            task["python_callable"] = catalog.PYTHON_CALLABLES[node.type]
+            task["op_kwargs"] = {
+                key: value for key, value in params.items() if key not in ("trigger_rule", "retries")
+            }
+            task.update({key: value for key, value in params.items() if key in ("trigger_rule", "retries")})
         else:
             task.update(params)
         deps = downstream_map.get(node.id)
@@ -109,7 +111,7 @@ def from_yaml_dict(data: dict[str, Any]) -> DesignerDag:
         if node_type is None:
             raise ValueError(f"无法推断节点 '{task_id}' 的类型（operator: {operator or '未配置'}）")
 
-        if node_type == "notify":
+        if node_type in catalog.PYTHON_CALLABLES:
             raw_params = dict(task_cfg.get("op_kwargs") or {})
             raw_params.update({key: task_cfg[key] for key in ("trigger_rule", "retries") if key in task_cfg})
         else:

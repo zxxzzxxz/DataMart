@@ -76,7 +76,7 @@ SELECT count(*) AS pending_events FROM dwh.etl_batches WHERE event_delivered_at 
 
 失败排查：优先看 Airflow apply_batch 日志中的字段对账/质量报告。修正 ODS 后清理失败任务重试；
 切勿手工删除待处理日志或仅推进旧水位线。合法的业务规则变化需要先修改并评审质量套件。
-旧 `plugins/incremental.py` 仅保留为演示辅助函数，内置生产 DAG 已不再调用。
+旧 `plugins/incremental.py` 已删除（仅演示辅助函数，与事务引擎水位线诊断字段存在机制冲突），内置生产 DAG 均不依赖。
 
 ## 高可用边界
 

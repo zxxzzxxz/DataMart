@@ -22,12 +22,18 @@ if [ "$DB" = "airflow" ]; then
   docker compose stop airflow-apiserver airflow-scheduler airflow-dag-processor airflow-worker airflow-triggerer flower
 fi
 
+# 无论恢复成功还是失败，退出前必须把停掉的组件拉回来——否则 set -e 在 pg_restore
+# 失败时直接中止，平台会被留在"Airflow 全停"状态。trap 保持脚本原退出码。
+restart_components() {
+  local rc=$?
+  if [ "$DB" = "airflow" ]; then
+    echo ">> 重新启动 Airflow 组件（脚本退出码 $rc）..."
+    docker compose start airflow-apiserver airflow-scheduler airflow-dag-processor airflow-worker airflow-triggerer flower || true
+  fi
+}
+trap restart_components EXIT
+
 echo ">> 恢复 $DB 库 <- $DUMP_FILE"
 docker compose exec -T "$HOST" pg_restore -U "$USER" -d "$DB" --clean --if-exists < "$DUMP_FILE"
-
-if [ "$DB" = "airflow" ]; then
-  echo ">> 重新启动 Airflow 组件..."
-  docker compose start airflow-apiserver airflow-scheduler airflow-dag-processor airflow-worker airflow-triggerer flower
-fi
 
 echo ">> 恢复完成"

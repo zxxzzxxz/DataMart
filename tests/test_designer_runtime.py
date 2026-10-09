@@ -67,6 +67,7 @@ class _FakeAirflowClient:
         self.connect_ok = True
         self.explain_ok = True
         self.sql_statements: list = []
+        self.readonly_session = None
 
     def _maybe_fail(self) -> None:
         if self.unavailable:
@@ -110,6 +111,9 @@ class _FakeAirflowClient:
         class _Conn:
             def cursor(self):
                 return _Cursor()
+
+            def set_session(self, readonly=False):
+                fake.readonly_session = readonly
 
             def rollback(self):
                 pass
@@ -496,3 +500,110 @@ def test_viewer_cannot_trigger_rollback_or_check_sql(client):
     # viewer 读接口仍可用
     assert test_client.get("/api/dags/t_dag/runs", headers=headers).status_code == 200
     assert test_client.get("/api/dags/t_dag/versions", headers=headers).status_code == 200
+
+
+# ---------- H1 check-sql 注入修复回归 ----------
+
+
+def test_check_sql_rejects_multi_statement(client):
+    client_obj, _fake = client
+    token = _login(client_obj, "editor1", "editor-pass")
+    resp = client_obj.post(
+        "/api/check-sql",
+        json={"sql": "SELECT 1; DROP TABLE dm.daily_city_sales"},
+        headers=_bearer(token),
+    )
+    assert resp.status_code == 400
+
+
+def test_check_sql_uses_readonly_session(client):
+    client_obj, fake = client
+    token = _login(client_obj, "editor1", "editor-pass")
+    resp = client_obj.post("/api/check-sql", json={"sql": "SELECT 1"}, headers=_bearer(token))
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    assert fake.readonly_session is True
+
+
+# ---------- H4 损坏 YAML 隔离回归 ----------
+
+
+def _write_broken_yaml(tmp_path: Path) -> None:
+    broken = tmp_path / "dags" / "designer" / "broken.yaml"
+    broken.parent.mkdir(parents=True, exist_ok=True)
+    broken.write_text("demo:\n  - [unclosed bracket\n", encoding="utf-8")
+
+
+def test_list_skips_syntactically_corrupted_yaml(client, tmp_path):
+    client_obj, _fake = client
+    token = _login(client_obj, "editor1", "editor-pass")
+    assert client_obj.post("/api/dags", json=_dag_body("good_dag"), headers=_bearer(token)).status_code == 201
+    _write_broken_yaml(tmp_path)
+    resp = client_obj.get("/api/dags", headers=_bearer(token))
+    assert resp.status_code == 200
+    assert [d["dag_id"] for d in resp.json()] == ["good_dag"]
+
+
+def test_get_corrupted_yaml_returns_400_not_500(client, tmp_path):
+    client_obj, _fake = client
+    token = _login(client_obj, "viewer1", "viewer-pass")
+    _write_broken_yaml(tmp_path)
+    assert client_obj.get("/api/dags/broken", headers=_bearer(token)).status_code == 400
+
+
+# ---------- Airflow 3 FAB /auth/token 返回 201 的兼容性回归 ----------
+
+
+def test_airflow_client_accepts_201_token_created(monkeypatch):
+    """真实 Airflow 3 创建令牌返回 201 Created（实测）；客户端必须接受任何 2xx。"""
+    import httpx
+    from app import airflow_client
+
+    def handler(request):
+        if request.url.path == "/auth/token":
+            return httpx.Response(201, json={"access_token": "tok-123"})
+        if request.url.path.endswith("/dagRuns"):
+            return httpx.Response(200, json={"dag_runs": [], "total_entries": 0})
+        return httpx.Response(404, json={"detail": "not found"})
+
+    client = airflow_client.AirflowClient("http://airflow-apiserver:8080", "u", "p")
+    monkeypatch.setattr(
+        client,
+        "_http",
+        httpx.Client(
+            base_url="http://airflow-apiserver:8080",
+            transport=httpx.MockTransport(handler),
+            timeout=10,
+        ),
+    )
+    assert client.list_runs("demo_visual_etl") == []
+
+
+def test_airflow_client_trigger_sends_explicit_null_logical_date(monkeypatch):
+    """Airflow 3.3.2 的 dagRuns 要求 body 显式携带 logical_date（实测缺省返回 422）。"""
+    import httpx
+    from app import airflow_client
+
+    seen = {}
+
+    def handler(request):
+        if request.url.path == "/auth/token":
+            return httpx.Response(201, json={"access_token": "tok-123"})
+        if request.url.path.endswith("/dagRuns"):
+            seen["body"] = request.content.decode()
+            return httpx.Response(200, json={"dag_run_id": "manual__x", "state": "queued"})
+        return httpx.Response(404, json={"detail": "not found"})
+
+    client = airflow_client.AirflowClient("http://airflow-apiserver:8080", "u", "p")
+    monkeypatch.setattr(
+        client,
+        "_http",
+        httpx.Client(
+            base_url="http://airflow-apiserver:8080",
+            transport=httpx.MockTransport(handler),
+            timeout=10,
+        ),
+    )
+    assert client.trigger("demo_visual_etl", conf={"k": 1})["state"] == "queued"
+    import json
+
+    assert json.loads(seen["body"]) == {"logical_date": None, "conf": {"k": 1}}

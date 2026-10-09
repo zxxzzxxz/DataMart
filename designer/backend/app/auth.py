@@ -4,7 +4,7 @@
   {"users": [{"username": ..., "password": "<salt_hex>$<pbkdf2_hex>", "role": ...}]}
   密码哈希：hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 100_000)
 - 登录令牌（无状态签名）：base64url(json{u,role,exp}) + "." + hmac_sha256_hex(secret, payload)
-  secret 取 env DESIGNER_AUTH_SECRET（缺省回退 DESIGNER_TOKEN），有效期 12h
+  secret 取 env DESIGNER_AUTH_SECRET；缺省生成进程级随机值并告警（不回退公开默认值），有效期 12h
 - 向后兼容：env DESIGNER_TOKEN 仍有效，等价于内置 admin（用户名 token-admin）
 - 审计：变更类请求追加一行 JSON 到 env DESIGNER_AUDIT_LOG（默认 /data/audit/designer-audit.jsonl）；
   目录自动创建，写入失败只告警不阻断请求
@@ -18,6 +18,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,12 +44,27 @@ class AuthUser:
 
 
 def legacy_token() -> str:
-    """内置 admin 的静态 token（env DESIGNER_TOKEN），请求期读取便于测试与轮换。"""
-    return os.environ.get("DESIGNER_TOKEN", "designer-dev-token")
+    """内置 admin 的静态 token（env DESIGNER_TOKEN；未配置即停用该通道，无公开默认值）。"""
+    return os.environ.get("DESIGNER_TOKEN", "")
+
+
+_process_secret: str | None = None
 
 
 def _secret() -> str:
-    return os.environ.get("DESIGNER_AUTH_SECRET") or legacy_token()
+    """会话签名密钥：优先取 DESIGNER_AUTH_SECRET；未配置时生成进程级随机值并告警
+    （重启后所有会话失效，但绝不回退到仓库公开值——旧行为可被离线伪造 admin token）。"""
+    configured = os.environ.get("DESIGNER_AUTH_SECRET")
+    if configured:
+        return configured
+    global _process_secret
+    if _process_secret is None:
+        _process_secret = secrets.token_hex(32)
+        log.warning(
+            "DESIGNER_AUTH_SECRET 未配置：已生成进程级随机会话密钥（重启后会话全部失效），"
+            "生产环境请显式配置该变量"
+        )
+    return _process_secret
 
 
 # ---------- 用户文件 ----------
@@ -73,9 +89,17 @@ def load_users() -> list[dict]:
 
 
 def save_users(users: list[dict]) -> None:
+    """原子写入用户文件（tmp + fsync + os.replace）：写窗口内的进程终止/磁盘满
+    只会留下临时文件，不会把 users.json 截断成半个 JSON 导致全员登录锁定。"""
     path = users_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"users": users}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    content = json.dumps({"users": users}, ensure_ascii=False, indent=2) + "\n"
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def hash_password(password: str, salt_hex: str | None = None) -> str:

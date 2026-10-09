@@ -78,26 +78,25 @@ docker compose "${PROJECT[@]}" "${COMPOSE_FILES[@]}" pull
 echo ">> 滚动更新容器"
 docker compose "${PROJECT[@]}" "${COMPOSE_FILES[@]}" up -d --remove-orphans
 
-echo ">> 等待容器健康（最长 5 分钟，无 healthcheck 的服务不参与等待）"
+echo ">> 等待容器健康（最长 5 分钟；无 healthcheck 的服务以 running 为准，exited 非 0 视为失败）"
+# 用 docker inspect 逐个判定：不依赖宿主机 python（旧实现用 python 解析 JSON 且 || true，
+# 目标机无 python 时健康门静默失效）；ps -a 让"退出即失败"的一次性/崩溃容器可见
 deadline=$(( $(date +%s) + 300 ))
 while :; do
-  # ps --format json 每行一个服务对象；健康字段缺失（无 healthcheck）视为通过
-  unhealthy="$(docker compose "${PROJECT[@]}" "${COMPOSE_FILES[@]}" ps --format json 2>/dev/null \
-    | python -c 'import json,sys
-for line in sys.stdin:
-    line = line.strip()
-    if not line:
-        continue
-    o = json.loads(line)
-    h = o.get("Health", "")
-    if h and h != "healthy" and o.get("State") == "running":
-        print(o.get("Name"))' || true)"
+  unhealthy=""
+  for id in $(docker compose "${PROJECT[@]}" "${COMPOSE_FILES[@]}" ps -a -q 2>/dev/null); do
+    st="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}:{{.State.ExitCode}}{{end}}' "$id" 2>/dev/null || echo unknown)"
+    case "$st" in
+      healthy | running | exited:0) ;;
+      *) unhealthy="$unhealthy $st" ;;
+    esac
+  done
   if [[ -z "$unhealthy" ]]; then
     break
   fi
   if (( $(date +%s) >= deadline )); then
     echo "错误: 超时仍不健康的容器: $unhealthy" >&2
-    docker compose "${PROJECT[@]}" "${COMPOSE_FILES[@]}" ps >&2
+    docker compose "${PROJECT[@]}" "${COMPOSE_FILES[@]}" ps -a >&2
     echo "排查: docker compose ${PROJECT[*]} ${COMPOSE_FILES[*]} logs <服务名>" >&2
     exit 1
   fi

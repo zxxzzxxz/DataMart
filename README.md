@@ -65,7 +65,7 @@
 - **原子发布与重试**：明细/集市/日报/质检/变更确认/批次记录同事务提交；批次 ID 幂等重放，outbox 补发资产事件（至少一次）
 - **区间补跑**：conf 传参 `{"start_date","end_date"}` 原子重建已提交明细对应的集市与日报，带格式/顺序/31 天上限校验
 - **水平扩展**：Worker 默认 2 副本，`--scale airflow-worker=N` 继续扩
-- **可视化 DAG 设计器**：拖拽连线配置 Job 依赖（:8443），7 种节点类型（SQL/校验/通知/Bash/HTTP/SQL 传感器/占位）+ 任务级 trigger_rule/retries；画布内一键触发运行、运行状态实时着色回显、版本历史（快照/预览/回滚）、SQL 预检（EXPLAIN）、运行中删除保护；YAML 为唯一事实源进 git，dag-factory 渲染成真实 DAG——设计器下线不影响已生成 DAG 的运行（设计见 docs/visual-dag-designer.md）
+- **可视化 DAG 设计器**：拖拽连线配置 Job 依赖（:8443），9 种节点类型（SQL/校验/通知/Bash/HTTP/SQL 传感器/占位/**接口入库/文件入库**——后两种为数据接入能力：HTTP JSON 拉取与本地/S3 文件直写数仓，支持 append/truncate/upsert）+ 任务级 trigger_rule/retries；画布内一键触发运行、运行状态实时着色回显、版本历史（快照/预览/回滚）、SQL 预检（EXPLAIN）、运行中删除保护；YAML 为唯一事实源进 git，dag-factory 渲染成真实 DAG——设计器下线不影响已生成 DAG 的运行（设计见 docs/visual-dag-designer.md）
 - **TLS 统一入口**：nginx 终结 TLS，所有 Web UI 收拢到 `https://localhost/`（HTTP 自动跳转），开发证书一键生成（`scripts/gen-certs.sh`），生产替换真实证书即可
 - **数据库主备**：airflow 元库与 warehouse 均为主库 + 热备（异步流复制，RPO 取决于复制延迟）；主库宕机由 `scripts/pg-failover.sh` 手动接管，实际 RTO 需演练；WAL 持续归档支持 PITR（`scripts/restore-pitr.sh`）
 - **Broker 持久化**：Redis AOF everysec，容器/宿主机重启后队列任务不丢失
@@ -133,12 +133,13 @@ dags/designer_loader.py dag-factory 引导：扫描 designer/*.yaml 渲染成 DA
 dags/designer/         可视化设计器产物（YAML 即 DAG，进 git 版本管理）
 plugins/               通用插件（warehouse_pipeline.py 事务引擎、pipeline_tasks.py 调度适配、alerting.py 告警）
 plugins/dag_designer/  设计器渲染层（图模型 schema / 节点目录 catalog / YAML 双向转换）
+src/datamart/          共享内部包（ETL 事务引擎/工作流渲染层/基础设施适配，pip install -r requirements.txt 安装）
 designer/              可视化 DAG 设计器（backend=FastAPI，frontend=React+React Flow）
 config/                airflow.cfg 覆盖配置（可选）
 logs/                  任务运行日志（自动生成，勿提交；同时被 Alloy 采入 Loki）
 backups/               数据库备份（自动生成，勿提交；同步副本在 MinIO）
 scripts/               运维脚本（备份/恢复/故障切换/恢复演练/证书生成，详见 docs/ha-dr.md；install-centos7.sh 为 CentOS 7 一键部署）
-tests/                 DAG 完整性测试 + 设计器渲染层单测
+tests/                 全量测试（DAG 结构 / 渲染层 / 设计器后端 / 架构回归 / 真实 PostgreSQL 验收——后者需 DATAMART_TEST_DSN）
 docker/postgres/       PG 主备镜像（流复制 + WAL 归档配置）
 docker/airflow/        Airflow 一体化镜像（官方镜像 + 固化 dag-factory/pytest，双用户可用）
 docker/backup/         备份/恢复演练镜像（pg_dump + basebackup + MinIO 同步）
@@ -152,8 +153,8 @@ docker/loki/  docker/alloy/  集中日志（存储 14 天 / 容器与任务日�
 docker/warehouse-init/ 数据仓库初始化 SQL（分层 schema + 示例源数据）
 config/data_quality/   数据质量套件定义 + baselines/（schema 漂移基线）
 docs/                  设计文档与运维手册（ha-dr / sso / deployment / visual-dag-designer）
-.github/workflows/     CI（ruff+pytest）/ Security（trivy+pip-audit+bandit）/ CD（发布部署）
-docker-compose.yaml    开发环境（+ docker-compose.staging.yml 演练、docker-compose.prod.yml 生产覆盖层）
+.github/workflows/     CI（ruff 全目录 + 前端门禁 typecheck/eslint/vitest + 节点契约 + designer-backend + DAG 测试 + PG 验收 + compose 校验）/ Security（trivy+pip-audit+bandit）/ CD（发布部署）
+docker-compose.yaml    开发环境（+ docker-compose.staging.yml 演练、docker-compose.prod.yml 生产、docker-compose.mini.yml 小机器精简演示）
 ```
 
 ## 常用操作
@@ -230,8 +231,9 @@ docker compose exec airflow-scheduler bash -c \
 .venv\Scripts\ruff check dags plugins tests        # lint
 .venv\Scripts\ruff format dags plugins tests       # 格式化
 
-# 提交代码即触发 CI（.github/workflows/ci.yml）：ruff 检查 + DAG 完整性测试
-# DAG 测试在 CI 中用 sqlite + 官方 constraints 运行，无需启动 Docker
+# 提交代码即触发 CI（.github/workflows/ci.yml，6 个 job）：
+# ruff 全目录检查 / 前端 typecheck+eslint+vitest+build 与节点目录契约 / designer-backend 验收 /
+# DAG 测试（sqlite + 官方 constraints，附 PostgreSQL 16 服务跑真实库用例）/ postgres-acceptance / compose 校验
 ```
 
 ## 环境分离
@@ -242,8 +244,13 @@ docker compose up -d
 
 # 生产：密钥强制从环境变量传入（缺失即拒绝启动）、数据仓库与 MinIO 不暴露端口、Worker 4 副本
 export AIRFLOW__CORE__FERNET_KEY=... AIRFLOW__API_AUTH__JWT_SECRET=... _AIRFLOW_WWW_USER_PASSWORD=...
-export POSTGRES_REPLICATION_PASSWORD=... MINIO_ROOT_PASSWORD=...
+export POSTGRES_REPLICATION_PASSWORD=... POSTGRES_PASSWORD=... WAREHOUSE_PASSWORD=... MINIO_ROOT_PASSWORD=...
+export GRAFANA_ADMIN_PASSWORD=... KEYCLOAK_ADMIN_PASSWORD=... AIRFLOW_ADMIN_PASSWORD=...
+export DESIGNER_TOKEN=... DESIGNER_AUTH_SECRET=...
 docker compose -f docker-compose.yaml -f docker-compose.prod.yml up -d
+
+# 精简演示（2C/2G 小机器）：仅起核心组件、无 HA/监控/备份，启动序列与取舍见 docker-compose.mini.yml 头部注释
+docker compose -f docker-compose.yaml -f docker-compose.mini.yml up -d postgres warehouse redis
 ```
 
 ## 高可用与灾备

@@ -92,7 +92,7 @@ WAL 归档有两份副本：本地卷 `pg-wal-archive-*` 与 MinIO 的 `datamart
 |---|---|---|---|
 | 逻辑备份 | 每日 `pg_dump -Fc`（两库） | `./backups/*.dump` + MinIO `datamart-backups` | 本地 7 份；远端不限 |
 | PITR 基线 | 每日 `pg_basebackup -Ft -z` | `./backups/base/` + MinIO `datamart-backups/base/` | 本地 7 份；远端不限 |
-| WAL 归档 | 持续归档（60s 强制切换） | `pg-wal-archive-*` 卷 + MinIO `datamart-wal/` | 卷长期保留 |
+| WAL 归档 | 持续归档（60s 强制切换） | `pg-wal-archive-*` 卷 + MinIO `datamart-wal/` | 本地 7 天（`WAL_LOCAL_KEEP_DAYS`）/ 远端默认 30 天（`WAL_REMOTE_EXPIRY_DAYS`，shipper 幂等维护 MinIO 过期策略） |
 
 - 立即手动备份：`scripts/backup.sh`
 - 常规恢复（整库回到最近一次 dump）：`scripts/restore.sh backups/<db>_<ts>.dump`

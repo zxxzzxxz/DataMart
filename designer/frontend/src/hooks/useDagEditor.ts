@@ -245,7 +245,7 @@ export function useDagEditor(dagId: string, tokenVersion: number) {
       const st = errStatus(e);
       const bodyErrs = errBodyErrors(e);
       if (st === 409) {
-        alert('保存失败：文件已被他人修改，请刷新后重试');
+        alert('保存失败：文件已被他人修改。点击工具栏「重新加载」查看最新版本后再编辑（当前未保存改动将丢失）');
       } else if (st === 422 && bodyErrs) {
         applyValidation(bodyErrs);
       } else {
@@ -262,8 +262,14 @@ export function useDagEditor(dagId: string, tokenVersion: number) {
     setDirty(false);
     setReloadTick(t => t + 1);
   };
+  // 乐观锁冲突后的恢复入口：丢弃本地未保存改动，从服务端重新加载当前版本
+  const reloadCurrent = () => {
+    dirtyRef.current = false;
+    setDirty(false);
+    setReloadTick(t => t + 1);
+  };
   const updateMeta = (value: DagMeta) => { setMeta(value); markDirty(); };
   return { catalog, meta, nodes, edges, selectedId, setSelectedId, dirty, errors, notice,
     loading, loadError, saving, validating, setNotice, updateMeta, handleNodesChange, handleEdgesChange,
-    onConnect, addNode, renameNode, updateNodeParams, deleteNode, onValidate, onSave, reload };
+    onConnect, addNode, renameNode, updateNodeParams, deleteNode, onValidate, onSave, reload, reloadCurrent };
 }

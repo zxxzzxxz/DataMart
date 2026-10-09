@@ -3,7 +3,9 @@
 #   /backups              -> minio/datamart-backups        （pg_dump + PITR 基准备份）
 #   /walarchive-airflow   -> minio/datamart-wal/airflow    （airflow 库 WAL 归档）
 #   /walarchive-warehouse -> minio/datamart-wal/warehouse  （warehouse 库 WAL 归档）
-# 不使用 --remove：本地按 BACKUP_KEEP 清理后，远端历史仍保留，由 MinIO 生命周期策略管理。
+# 保留策略：备份本地按 BACKUP_KEEP 清理（backup.sh）、WAL 本地按 WAL_LOCAL_KEEP_DAYS（默认 7 天）
+# 清理（本脚本 find -delete）；远端由本脚本维护 MinIO 过期策略（datamart-wal 默认 30 天，
+# WAL_REMOTE_EXPIRY_DAYS 可调；datamart-backups 不设过期，长期保留）。
 # MinIO 未就绪或同步失败时等待重试，自身保持健壮不退出（不依赖 restart: always）。
 set -euo pipefail
 
@@ -36,6 +38,15 @@ sync_once() {
   mc mirror --overwrite /walarchive-airflow "$MINIO_ALIAS/datamart-wal/airflow" || return 1
   echo "[ship] $(date -Iseconds) 同步 /walarchive-warehouse -> $MINIO_ALIAS/datamart-wal/warehouse"
   mc mirror --overwrite /walarchive-warehouse "$MINIO_ALIAS/datamart-wal/warehouse" || return 1
+
+  # 本地 WAL 保留：已镜像到 MinIO 的历史段本地只保留 WAL_LOCAL_KEEP_DAYS 天（默认 7 天）。
+  # 不清理会按每主库约 22.5GB/天 无限增长，最终打满磁盘使 archive_command 失败、主库停写。
+  find /walarchive-airflow /walarchive-warehouse -type f \
+    -mtime "+${WAL_LOCAL_KEEP_DAYS:-7}" -delete 2>/dev/null || true
+
+  # 远端 WAL 保留：MinIO 桶过期策略（幂等，默认 30 天）；mc 版本不支持时仅告警，不阻断同步
+  mc ilm rule add "$MINIO_ALIAS/datamart-wal" --expiry-days "${WAL_REMOTE_EXPIRY_DAYS:-30}" \
+    >/dev/null 2>&1 || true
 }
 
 echo "[ship] 启动，目标 $MINIO_URL，同步间隔 ${INTERVAL}s"

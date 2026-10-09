@@ -14,9 +14,13 @@ x-airflow-prod-env: &airflow-prod-env
   AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET:?生产环境必须提供 AIRFLOW__API_AUTH__JWT_SECRET}
   _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:?生产环境必须提供 _AIRFLOW_WWW_USER_PASSWORD}
 
-# PG 流复制账号口令：主库/备库/备份服务必须一致，生产强制传入
-x-pg-repl-prod-env: &pg-repl-prod-env
+# PG 口令：流复制账号 + 两个数据库属主口令，生产全部强制传入（拒绝基础文件的公开默认值）
+x-pg-prod-env: &pg-prod-env
   POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:?生产环境必须提供 POSTGRES_REPLICATION_PASSWORD}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?生产环境必须提供 POSTGRES_PASSWORD}
+x-warehouse-prod-env: &warehouse-prod-env
+  POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:?生产环境必须提供 POSTGRES_REPLICATION_PASSWORD}
+  POSTGRES_PASSWORD: ${WAREHOUSE_PASSWORD:?生产环境必须提供 WAREHOUSE_PASSWORD}
 
 services:
   airflow-apiserver:
@@ -37,18 +41,21 @@ services:
     environment: *airflow-prod-env
 
   postgres:
-    environment: *pg-repl-prod-env
+    environment: *pg-prod-env
   postgres-replica:
-    environment: *pg-repl-prod-env
+    environment: *pg-prod-env
   warehouse:
-    environment: *pg-repl-prod-env
+    environment: *warehouse-prod-env
     # 生产环境不对宿主机暴露数据仓库端口（仅容器网络内访问）
     # 注意:多文件叠加时 ports 是合并而非替换,必须用 !override 才能清空基础文件的映射
     ports: !override []
   warehouse-replica:
-    environment: *pg-repl-prod-env
+    environment: *warehouse-prod-env
   postgres-backup:
-    environment: *pg-repl-prod-env
+    environment:
+      POSTGRES_REPLICATION_PASSWORD: ${POSTGRES_REPLICATION_PASSWORD:?生产环境必须提供 POSTGRES_REPLICATION_PASSWORD}
+      AIRFLOW_DB_PASSWORD: ${POSTGRES_PASSWORD:?生产环境必须提供 POSTGRES_PASSWORD}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_PASSWORD:?生产环境必须提供 WAREHOUSE_PASSWORD}
 
   # 对象存储管理员密码：生产强制传入（minio 与 backup-shipper 必须一致）
   minio:
@@ -63,3 +70,16 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?生产环境必须提供 MINIO_ROOT_PASSWORD}
+
+  # 控制台与设计器口令：同样拒绝基础文件的公开默认值
+  grafana:
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?生产环境必须提供 GRAFANA_ADMIN_PASSWORD}
+  keycloak:
+    environment:
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?生产环境必须提供 KEYCLOAK_ADMIN_PASSWORD}
+  designer-api:
+    environment:
+      DESIGNER_TOKEN: ${DESIGNER_TOKEN:?生产环境必须提供 DESIGNER_TOKEN}
+      DESIGNER_AUTH_SECRET: ${DESIGNER_AUTH_SECRET:?生产环境必须提供 DESIGNER_AUTH_SECRET}
+      AIRFLOW_API_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?生产环境必须提供 AIRFLOW_ADMIN_PASSWORD}

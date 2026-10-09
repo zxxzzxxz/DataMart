@@ -25,13 +25,24 @@ ASSET_URI = "postgres://warehouse/warehouse/dm/daily_city_sales"
 
 
 class SalesPipeline:
-    def __init__(self, connect: Callable, config_dir, *, lock_timeout_ms=30_000, repository=None):
+    def __init__(
+        self,
+        connect: Callable,
+        config_dir,
+        *,
+        lock_timeout_ms=30_000,
+        statement_timeout_ms=600_000,
+        repository=None,
+    ):
         self.repository = repository or PostgresSalesRepository()
         self.connect = connect
         self.config_dir = Path(config_dir)
         self.lock_timeout_ms = int(lock_timeout_ms)
         if self.lock_timeout_ms <= 0:
             raise ValueError("lock_timeout_ms must be positive")
+        self.statement_timeout_ms = int(statement_timeout_ms)
+        if self.statement_timeout_ms <= 0:
+            raise ValueError("statement_timeout_ms must be positive")
 
     def run(self, batch_id: str, mode: str, *, start_date=None, end_date=None, checkpoint=None) -> dict:
         """Apply/replay a logical batch. checkpoint is an acceptance-test fault hook.
@@ -46,7 +57,10 @@ class SalesPipeline:
             raise ValueError(f"Unknown pipeline mode: {mode}")
         arguments = self._arguments(mode, start_date, end_date)
         with PostgresUnitOfWork(
-            self.connect, lock_key=LOCK_KEY, lock_timeout_ms=self.lock_timeout_ms
+            self.connect,
+            lock_key=LOCK_KEY,
+            lock_timeout_ms=self.lock_timeout_ms,
+            statement_timeout_ms=self.statement_timeout_ms,
         ) as unit:
             conn, cur = unit.connection, unit.cursor
             cur.execute("SET LOCAL TIME ZONE 'Asia/Shanghai'")
@@ -101,6 +115,9 @@ class SalesPipeline:
                     "last_watermark = EXCLUDED.last_watermark, updated_at = now()"
                 )
             cur.execute("SELECT stat_date::text FROM batch_dates ORDER BY stat_date")
+            # 空增量（无源变更且未触发全量对账）无需发布：提交时事件即确认为送达，
+            # 避免下游审计 DAG 每个调度刻度空转
+            publish_pending = not (mode == "incremental" and not full and source_changes == 0)
             result = {
                 "batch_id": batch_id,
                 "mode": mode,
@@ -111,9 +128,10 @@ class SalesPipeline:
                 "deleted_orders": deleted_orders,
                 "affected_dates": [row[0] for row in cur.fetchall()],
                 "quality": reports,
+                "publish_pending": publish_pending,
                 "replayed": False,
             }
-            batches.commit_record(batch_id, mode, arguments, result)
+            batches.commit_record(batch_id, mode, arguments, result, publish_pending=publish_pending)
             self._checkpoint(checkpoint, "before_commit", conn)
         self._checkpoint(checkpoint, "after_commit", conn)
         return result
