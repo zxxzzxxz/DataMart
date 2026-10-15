@@ -5,7 +5,7 @@
 # 注：dl.min.io 已不再提供预编译二进制（MinIO 转源码分发），mc 改从 quay.io 官方镜像拷贝。
 FROM quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z AS mc
 
-FROM postgres:16
+FROM postgres:18
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates \
