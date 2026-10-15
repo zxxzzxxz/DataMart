@@ -12,7 +12,7 @@
 #     之所以不走 compose 挂载：warehouse 还需挂载初始化 SQL 目录，
 #     只读目录挂载会让同级文件挂载无法创建挂载点（read-only file system）。
 # =========================================================
-FROM postgres:16
+FROM postgres:18
 
 # WAL 归档目录：主库 archive_command 写入 /walarchive，
 # 备库 promote 后沿用同一配置继续归档，归档不中断。
