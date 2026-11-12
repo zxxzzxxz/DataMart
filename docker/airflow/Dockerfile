@@ -10,7 +10,7 @@
 # 以 root 启动（挂载目录写权限），entrypoint 只对主进程降权到 airflow；
 # exec 进入容器调试/运维时进程是 root，user site 解析到 /root/.local 就
 # 找不到包装到全局 site-packages 后，airflow 用户与 root 的 sys.path 均可见。
-FROM apache/airflow:3.3.2
+FROM apache/airflow:3.4.0
 
 USER root
 # 以 airflow 用户的 pip 装入 user site（/home/airflow/.local），与官方镜像全家桶同处；
